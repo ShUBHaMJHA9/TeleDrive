@@ -36,7 +36,22 @@
 
 ---
 
+## 🎬 Demo Video
+
+> Click the thumbnail below to watch a full walkthrough of TeleDrive — login, upload, channel sync, preview, sharing, and more.
+
+<div align="center">
+  <a href="screenshot/scrren_recording.mp4">
+    <img src="screenshot/Drive.png" alt="▶ Watch TeleDrive Demo" width="80%" style="border-radius:12px; border: 2px solid #e5e7eb;"/>
+  </a>
+  <br/>
+  <sub>▶ <a href="screenshot/scrren_recording.mp4"><strong>Click to watch the full demo video</strong></a> &nbsp;|&nbsp; MP4 · ~56 MB</sub>
+</div>
+
+---
+
 ## ✨ Complete Feature Reference
+
 
 ### 🔐 Authentication & Accounts
 
