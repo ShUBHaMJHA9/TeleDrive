@@ -40,7 +40,7 @@
 
 > Full walkthrough — login with Telegram OTP, upload files, sync channels, preview media, share folders, and more.
 
-https://github.com/ShUBHaMJHA9/TeleDrive/releases/download/Screenshort_Video/scrren_recording.mp4
+https://github.com/user-attachments/assets/bf59f83b-3d36-41ad-9d0a-f937db93836f
 
 ---
 
