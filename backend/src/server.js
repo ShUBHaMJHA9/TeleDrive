@@ -3,6 +3,8 @@ import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import compression from 'compression';
+import helmet from 'helmet';
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -15,6 +17,14 @@ import { authenticateJWT } from './middleware/auth.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Production Speed & Security
+app.use(helmet({
+  contentSecurityPolicy: false, 
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false,
+}));
+app.use(compression());
 
 // CORS - Allow localhost and Codespaces URLs
 app.use(cors({
@@ -42,8 +52,8 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.',
+  max: 1000, // Increased for development and account switching
+  message: { error: 'Too many requests from this IP, please try again later.' },
 });
 app.use('/api/', limiter);
 
@@ -74,8 +84,54 @@ app.use('/api/files', authenticateJWT, fileRoutes);
 app.use('/api/folders', authenticateJWT, fileRoutes); // Same route handler
 app.use('/api/uploads', authenticateJWT, uploadRoutes);
 app.use('/api/shares', shareRoutes);
-app.use('/api/me', authenticateJWT, (req, res) => {
-  res.json({ user: req.user });
+import { User, File, Folder } from './models/index.js';
+
+app.use('/api/me', authenticateJWT, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId);
+    const totalSize = await File.aggregate([
+      { $match: { ownerId: new mongoose.Types.ObjectId(req.user.userId), isTrashed: { $ne: true } } },
+      { $group: { _id: null, total: { $sum: "$size" } } }
+    ]);
+    
+    res.json({ 
+      user, 
+      storage: {
+        used: totalSize.length > 0 ? totalSize[0].total : 0,
+        limit: null // Unlimited
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/search', authenticateJWT, async (req, res) => {
+  try {
+    const { q } = req.query;
+    const userId = req.user.userId;
+
+    if (!q) return res.json({ files: [], folders: [] });
+
+    // Case-insensitive regex search
+    const regex = new RegExp(q, 'i');
+
+    const files = await File.find({
+      ownerId: userId,
+      isTrashed: { $ne: true },
+      name: { $regex: regex }
+    }).select('-chunks.telegramFileId').limit(50);
+
+    const folders = await Folder.find({
+      ownerId: userId,
+      isTrashed: { $ne: true },
+      name: { $regex: regex }
+    }).limit(50);
+
+    res.json({ files, folders });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Error handling

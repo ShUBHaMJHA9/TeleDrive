@@ -10,14 +10,34 @@ export const generateToken = (userId, telegramId) => {
   );
 };
 
-export const authenticateJWT = (req, res, next) => {
-  const authHeader = req.headers.authorization;
+import { User } from '../models/index.js';
 
-  if (!authHeader) {
-    return res.status(401).json({ error: 'Authorization header missing' });
+export const authenticateJWT = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  const apiKey = req.query.apiKey || req.headers['x-api-key'];
+
+  if (apiKey) {
+    try {
+      const user = await User.findOne({ developerApiKey: apiKey });
+      if (!user) return res.status(401).json({ error: 'Invalid API Key' });
+      req.user = { userId: user._id.toString(), telegramId: user.telegramId };
+      return next();
+    } catch (err) {
+      return res.status(500).json({ error: 'Database error validating API Key' });
+    }
   }
 
-  const token = authHeader.split(' ')[1];
+  let token = null;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  } else if (req.query && req.query.token) {
+    token = req.query.token;
+  }
+
+  if (!token) {
+    return res.status(401).json({ error: 'Authorization token or API Key missing' });
+  }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);

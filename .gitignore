@@ -9,3 +9,10 @@ npm-debug.log*
 yarn-debug.log*
 .vscode/
 .idea/
+# Telegram session temp files
+*.session
+*.session-journal
+# OS
+Thumbs.db
+# Scratch
+scratch/

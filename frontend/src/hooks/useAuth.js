@@ -5,10 +5,10 @@ import toast from 'react-hot-toast';
 export const useAuth = () => {
   const { user, token, isAuthenticated, setUser, setToken, setLoading, logout } = useAuthStore();
 
-  const requestCode = async (phone) => {
+  const requestCode = async (phone, apiId, apiHash) => {
     try {
       setLoading(true);
-      const res = await authAPI.requestCode(phone);
+      const res = await authAPI.requestCode(phone, apiId, apiHash);
       toast.success('Code sent to your Telegram');
       return res.data;
     } catch (error) {

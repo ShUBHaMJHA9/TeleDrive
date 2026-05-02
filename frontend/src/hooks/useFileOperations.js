@@ -80,7 +80,7 @@ export const useFileOperations = () => {
         setLoading(true);
         await fileAPI.deleteFolder(folderId);
         deleteFolder(folderId);
-        toast.success('Folder deleted!');
+        toast.success('Folder permanently deleted!');
       } catch (error) {
         toast.error('Failed to delete folder');
         throw error;
@@ -91,12 +91,82 @@ export const useFileOperations = () => {
     [deleteFolder]
   );
 
+  const trashFile = useCallback(
+    async (fileId) => {
+      try {
+        setLoading(true);
+        await fileAPI.moveToTrashFile(fileId);
+        deleteFile(fileId); // Remove from current view
+        toast.success('File moved to trash');
+      } catch (error) {
+        toast.error('Failed to move to trash');
+        throw error;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [deleteFile]
+  );
+
+  const trashFolder = useCallback(
+    async (folderId) => {
+      try {
+        setLoading(true);
+        await fileAPI.moveToTrashFolder(folderId);
+        deleteFolder(folderId); // Remove from current view
+        toast.success('Folder moved to trash');
+      } catch (error) {
+        toast.error('Failed to move to trash');
+        throw error;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [deleteFolder]
+  );
+
+  const restoreFile = useCallback(
+    async (fileId) => {
+      try {
+        setLoading(true);
+        await fileAPI.restoreFile(fileId);
+        toast.success('File restored');
+      } catch (error) {
+        toast.error('Failed to restore file');
+        throw error;
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
+
+  const restoreFolder = useCallback(
+    async (folderId) => {
+      try {
+        setLoading(true);
+        await fileAPI.restoreFolder(folderId);
+        toast.success('Folder restored');
+      } catch (error) {
+        toast.error('Failed to restore folder');
+        throw error;
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
+
   return {
     createFolder,
     renameFile,
     renameFolder,
     removeFile,
     removeFolder,
+    trashFile,
+    trashFolder,
+    restoreFile,
+    restoreFolder,
     loading,
   };
 };

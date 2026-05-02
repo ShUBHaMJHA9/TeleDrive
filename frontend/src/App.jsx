@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { useAuthStore } from './store';
 import { userAPI } from './api/client';
 import { AuthScreen, PremiumFileManager } from './components';
+import SharePage from './pages/SharePage';
 import { Toaster } from 'react-hot-toast';
 
-function App() {
+function MainApp() {
   const { isAuthenticated, token, setUser, setToken, logout } = useAuthStore();
   const [loading, setLoading] = useState(true);
 
@@ -14,16 +16,13 @@ function App() {
       if (savedToken) {
         setToken(savedToken);
         try {
-          // Add timeout to prevent hanging
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 5000);
-          
           const res = await userAPI.getProfile();
-          clearTimeout(timeoutId);
-          setUser(res.data);
+          setUser(res.data.user || res.data);
         } catch (error) {
           console.error('Failed to fetch profile:', error.message);
-          logout();
+          if (error.response && error.response.status === 401) {
+            logout();
+          }
         }
       }
       setLoading(false);
@@ -43,15 +42,22 @@ function App() {
     );
   }
 
+  return isAuthenticated ? (
+    <PremiumFileManager onLogout={logout} />
+  ) : (
+    <AuthScreen />
+  );
+}
+
+function App() {
   return (
-    <>
-      {isAuthenticated ? (
-        <PremiumFileManager onLogout={logout} />
-      ) : (
-        <AuthScreen />
-      )}
+    <BrowserRouter>
+      <Routes>
+        <Route path="/share/:token" element={<SharePage />} />
+        <Route path="/*" element={<MainApp />} />
+      </Routes>
       <Toaster position="top-right" />
-    </>
+    </BrowserRouter>
   );
 }
 

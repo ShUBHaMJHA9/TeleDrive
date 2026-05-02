@@ -32,13 +32,17 @@ API.interceptors.request.use((config) => {
 
 // Auth endpoints
 export const authAPI = {
-  requestCode: (phone) => API.post('/auth/telegram/request_code', { phone }),
+  requestCode: (phone, apiId, apiHash) => API.post('/auth/telegram/request_code', { phone, apiId, apiHash }),
   verifyCode: (phone, code) => API.post('/auth/telegram/verify_code', { phone, code }),
+  loginPassword: (phone, password) => API.post('/auth/login', { phone, password }),
+  setPassword: (password) => API.post('/auth/password', { password }),
+  generateApiKey: () => API.post('/auth/api-key'),
   refresh: () => API.post('/auth/refresh'),
 };
 
 // File endpoints
 export const fileAPI = {
+  getStreamUrl: (fileId) => `${getAPIBaseURL()}/files/${fileId}/preview?token=${localStorage.getItem('token') || ''}`,
   getFolderContents: (folderId = 'root', page = 1) =>
     API.get(`/folders/${folderId}`, { params: { page, limit: 50 } }),
   createFolder: (name, parentId = null) =>
@@ -51,12 +55,50 @@ export const fileAPI = {
     API.delete(`/files/${fileId}`),
   deleteFolder: (folderId) =>
     API.delete(`/folders/${folderId}`),
+  moveToTrashFile: (fileId) =>
+    API.patch(`/files/${fileId}`, { isTrashed: true }),
+  moveToTrashFolder: (folderId) =>
+    API.patch(`/folders/${folderId}`, { isTrashed: true }),
+  restoreFile: (fileId) =>
+    API.patch(`/files/${fileId}`, { isTrashed: false }),
+  restoreFolder: (folderId) =>
+    API.patch(`/folders/${folderId}`, { isTrashed: false }),
+  getTrashContents: () =>
+    API.get('/files/trash/all'),
   moveFile: (fileId, targetFolderId) =>
     API.patch(`/files/${fileId}`, { folderId: targetFolderId }),
   moveFolder: (folderId, targetFolderId) =>
     API.patch(`/folders/${folderId}`, { parentId: targetFolderId }),
+  copyFile: (fileId, targetFolderId) =>
+    API.post(`/files/${fileId}/copy`, { targetFolderId }),
+  copyFolder: (folderId, targetFolderId) =>
+    API.post(`/folders/${folderId}/copy`, { targetFolderId }),
+  saveFileContent: (fileId, content) =>
+    API.put(`/files/${fileId}/content`, { content }),
   searchFiles: (query) =>
     API.get('/search', { params: { q: query } }),
+  extractFile: (fileId, folderName) =>
+    API.post(`/files/${fileId}/extract`, { folderName }),
+  compressFiles: (fileIds, zipName, folderId) =>
+    API.post('/files/compress', { fileIds, zipName, folderId }),
+  starFile: (fileId, isStarred) =>
+    API.patch(`/files/${fileId}`, { isStarred }),
+  starFolder: (folderId, isStarred) =>
+    API.patch(`/folders/${folderId}`, { isStarred }),
+  getStarredContents: () =>
+    API.get('/files/filter/starred'),
+  getRecentContents: () =>
+    API.get('/files/filter/recent'),
+  getFoldersByType: (type) =>
+    API.get(`/folders/type/${type}`),
+  createChatFolder: (name, type, parentId = null) =>
+    API.post('/folders/chat', { name, type, parentId }),
+  syncChannels: () =>
+    API.post('/folders/sync'),
+  setThumbnail: (fileId, formData) =>
+    API.post(`/files/${fileId}/thumbnail`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    }),
 };
 
 // Upload endpoints
@@ -81,14 +123,18 @@ export const uploadAPI = {
     API.post(`/uploads/${uploadId}/commit`),
   getUploadStatus: (uploadId) =>
     API.get(`/uploads/${uploadId}/status`),
+  importUrl: (url, folderId) =>
+    API.post('/uploads/import-url', { url, folderId }, { timeout: 600000 }), // 10 mins timeout
 };
 
 // Share endpoints
 export const shareAPI = {
-  createShare: (fileId, type = 'public', expiresAt = null) =>
-    API.post('/shares', { fileId, type, expiresAt }),
+  createShare: (payload) =>
+    API.post('/shares', payload), // payload: { fileId? folderId? type expiresAt password permissions }
   getShare: (token) =>
     API.get(`/shares/${token}`),
+  getFolderContents: (token) =>
+    API.get(`/shares/${token}/folder-contents`),
   updateShareAccess: (shareId, allowedUsers) =>
     API.patch(`/shares/${shareId}`, { allowedUsers }),
 };
