@@ -1,0 +1,26 @@
+{
+  "name": "telegram-drive-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Telegram-based cloud storage backend",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "NODE_ENV=development node --watch src/server.js",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "express": "^4.18.0",
+    "mongoose": "^7.0.0",
+    "jsonwebtoken": "^9.0.0",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.0.0",
+    "axios": "^1.4.0",
+    "express-rate-limit": "^6.7.0",
+    "uuid": "^9.0.0",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "eslint": "^8.54.0"
+  }
+}
