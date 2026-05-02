@@ -10,6 +10,7 @@
     <img src="https://img.shields.io/badge/MongoDB-Atlas-47A248?style=flat-square&logo=mongodb"/>
     <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square"/>
     <a href="https://t.me/shubham97j"><img src="https://img.shields.io/badge/Telegram-@shubham97j-26A5E4?style=flat-square&logo=telegram"/></a>
+    <a href="https://www.linkedin.com/in/shubhamjha2005/"><img src="https://img.shields.io/badge/LinkedIn-shubhamjha2005-0A66C2?style=flat-square&logo=linkedin"/></a>
   </p>
 </div>
 
@@ -473,6 +474,7 @@ Telegram-Drive/
 | 📱 Telegram | [@shubham97j](https://t.me/shubham97j) |
 | 📧 Email | [shubhamjha2208@gmail.com](mailto:shubhamjha2208@gmail.com) |
 | 🐙 GitHub | [@ShUBHaMJHA9](https://github.com/ShUBHaMJHA9) |
+| 💼 LinkedIn | [shubhamjha2005](https://www.linkedin.com/in/shubhamjha2005/) |
 
 Open a [GitHub Issue](https://github.com/ShUBHaMJHA9/Telegram-Drive/issues) for bugs or feature requests.
 
@@ -487,5 +489,5 @@ MIT License © 2026 [Shubham Jha](https://github.com/ShUBHaMJHA9)
 ---
 
 <div align="center">
-  <sub>Made with ❤️ by <a href="https://t.me/shubham97j">Shubham Jha</a> — give it a ⭐ if it helped you!</sub>
+  <sub>Made with ❤️ by <a href="https://t.me/shubham97j">Shubham Jha</a> · <a href="https://www.linkedin.com/in/shubhamjha2005/">LinkedIn</a> · <a href="https://github.com/ShUBHaMJHA9">GitHub</a> — give it a ⭐ if it helped you!</sub>
 </div>
