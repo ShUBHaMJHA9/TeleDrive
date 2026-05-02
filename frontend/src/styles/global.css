@@ -1,0 +1,210 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  @apply box-border;
+}
+
+html {
+  @apply scroll-smooth;
+}
+
+body {
+  @apply bg-white text-gray-900 font-sans;
+}
+
+/* Typography */
+h1 {
+  @apply text-4xl font-bold tracking-tight;
+}
+
+h2 {
+  @apply text-3xl font-bold tracking-tight;
+}
+
+h3 {
+  @apply text-2xl font-semibold;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  @apply w-2 h-2;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-gray-100;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-300 rounded-full hover:bg-gray-400;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 300ms ease-out;
+}
+
+.animate-slide-up {
+  animation: slideUp 300ms ease-out;
+}
+
+
+/* React Phone Input 2 - Premium SaaS Design */
+.react-phone-input-container {
+  position: relative !important;
+  width: 100% !important;
+  display: flex !important;
+  align-items: stretch !important;
+  background-color: var(--td-input-bg, #ffffff) !important;
+  border: 1px solid var(--td-input-border, #e6e9ee) !important;
+  border-radius: 14px !important;
+  transition: box-shadow 240ms cubic-bezier(.2,.9,.3,1), border-color 180ms ease !important;
+  box-shadow: 0 6px 18px rgba(16,24,40,0.04) !important;
+  overflow: hidden !important;
+}
+
+.react-phone-input-container:hover {
+  border-color: var(--td-input-border-hover, #cbd5e1) !important;
+  box-shadow: 0 10px 30px rgba(16,24,40,0.06) !important;
+}
+
+.react-phone-input-container:focus-within {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 4px rgba(59,130,246,0.08), 0 18px 45px rgba(14, 42, 71, 0.06) !important;
+}
+
+.react-phone-input-container input {
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 14px 18px 14px 78px !important; /* space for flag + divider */
+  border: none !important;
+  border-radius: 0 !important;
+  font-size: 16px !important;
+  font-weight: 500 !important;
+  line-height: 1.6 !important;
+  height: 56px !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif !important;
+  background-color: transparent !important;
+  color: var(--td-text, #0f172a) !important;
+  transition: color 200ms ease, background-color 200ms ease !important;
+  box-sizing: border-box !important;
+  margin: 0 !important;
+  letter-spacing: 0.2px !important;
+}
+
+.react-phone-input-container input:focus {
+  outline: none !important;
+  color: #0f172a !important;
+}
+
+.react-phone-input-container input::placeholder {
+  color: #9ca3af !important;
+  font-weight: 400 !important;
+}
+
+/* Country flag button - Premium styling */
+.react-phone-input-container .flag-dropdown {
+  position: relative !important;
+  height: 56px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 16px !important;
+  flex-shrink: 0 !important;
+  background: linear-gradient(to bottom, var(--td-flag-bg, #ffffff), #fafafa) !important;
+  border-right: 1px solid rgba(15, 23, 42, 0.06) !important; /* subtle divider */
+  cursor: pointer !important;
+  transition: background-color 200ms ease, transform 120ms ease !important;
+  margin: 0 !important;
+}
+
+.react-phone-input-container .flag-dropdown:hover {
+  background: linear-gradient(to bottom, #f9fafb, #f3f4f6) !important;
+}
+
+.react-phone-input-container .flag-dropdown:active {
+  background: #f3f4f6 !important;
+}
+
+.react-phone-input-container .flag {
+  width: 28px !important;
+  height: 20px !important;
+  display: block !important;
+  margin: 0 !important;
+  background-size: contain !important;
+  background-repeat: no-repeat !important;
+  background-position: center !important;
+  border-radius: 3px !important;
+  box-shadow: 0 1px 2px rgba(2,6,23,0.06) !important;
+}
+
+/* Country list/dropdown - Premium styling */
+.react-phone-input-container .country-list {
+  position: absolute !important;
+  z-index: 100 !important;
+  top: calc(100% + 10px) !important;
+  left: 0 !important;
+  right: 0 !important;
+  max-height: 320px !important;
+  overflow-y: auto !important;
+  background: white !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 12px !important;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1), 0 0 1px rgba(0, 0, 0, 0.05) !important;
+  margin: 0 !important;
+}
+
+.react-phone-input-container .country-list .country {
+  padding: 12px 16px !important;
+  border-bottom: 1px solid #f3f4f6 !important;
+  cursor: pointer !important;
+  transition: all 200ms ease !important;
+  display: flex !important;
+  align-items: center !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  color: #374151 !important;
+}
+
+.react-phone-input-container .country-list .country:last-child {
+  border-bottom: none !important;
+}
+
+.react-phone-input-container .country-list .country:hover:not(.active) {
+  background-color: #f9fafb !important;
+  padding-left: 18px !important;
+}
+
+.react-phone-input-container .country-list .country.active {
+  background: linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%) !important;
+  color: #1e40af !important;
+  font-weight: 600 !important;
+}
+
+.react-phone-input-container .country-list .country .flag {
+  width: 24px !important;
+  height: 18px !important;
+  margin-right: 12px !important;
+  flex-shrink: 0 !important;
+  border-radius: 2px !important;
+}
+
+
+
