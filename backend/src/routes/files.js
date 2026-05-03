@@ -11,21 +11,83 @@ import os from 'os';
 const router = express.Router();
 const upload = multer({ dest: os.tmpdir(), limits: { fileSize: 2000 * 1024 * 1024 } });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 🛡️ GLOBAL STABILITY PATCH: Process-Level Catch for GramJS "resolve()" crashes
+//     MTProtoSender drops the promise chain for updates, causing unhandled 
+//     rejections that crash Node.js. This intercepts it at the process level.
+// ─────────────────────────────────────────────────────────────────────────────
+process.on('unhandledRejection', (reason, promise) => {
+  if (reason && reason.message && reason.message.includes('resolve()') && reason.message.includes('non-request instance')) {
+    // Silently ignore the GramJS internal update loop error
+    return;
+  }
+  // Log other unhandled rejections normally
+  console.error('Unhandled Rejection:', reason);
+});
+
 // Ensure thumbnail cache directory exists
 const THUMB_CACHE_DIR = path.join(os.tmpdir(), 'teledrive_thumbs');
 fs.mkdir(THUMB_CACHE_DIR, { recursive: true }).catch(() => {});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🚀 SPEED LAYER 1 — In-memory Telegram message metadata cache (TTL: 10 min)
+//    Eliminates repeated getMessages() calls on every video seek / range request
+// ─────────────────────────────────────────────────────────────────────────────
+export const MESSAGE_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+export const messageMetaCache = new Map(); // key: `${userId}:${chat}:${msgId}` -> { msg, cachedAt }
+
+export const getCachedMessage = (userId, chat, msgId) => {
+  const key = `${userId}:${chat}:${msgId}`;
+  const entry = messageMetaCache.get(key);
+  if (entry && (Date.now() - entry.cachedAt < MESSAGE_CACHE_TTL)) return entry.msg;
+  return null;
+};
+
+export const setCachedMessage = (userId, chat, msgId, msg) => {
+  const key = `${userId}:${chat}:${msgId}`;
+  messageMetaCache.set(key, { msg, cachedAt: Date.now() });
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🚀 SPEED LAYER 2 — In-memory stream buffer cache for small files (< 50 MB)
+//    Repeated plays / downloads never touch Telegram at all
+// ─────────────────────────────────────────────────────────────────────────────
+export const STREAM_CACHE_MAX_BYTES = 50 * 1024 * 1024;  // 50 MB per file
+export const STREAM_CACHE_TTL       = 15 * 60 * 1000;    // 15 minutes
+export const STREAM_CACHE_MAX_TOTAL = 500 * 1024 * 1024; // 500 MB total RAM budget
+export const streamCache = new Map(); // fileId -> { buffer, cachedAt, size }
+export let streamCacheTotalBytes = 0;
+
+export const getStreamCache = (fileId) => {
+  const entry = streamCache.get(fileId);
+  if (entry && (Date.now() - entry.cachedAt < STREAM_CACHE_TTL)) return entry.buffer;
+  if (entry) { streamCacheTotalBytes -= entry.size; streamCache.delete(fileId); }
+  return null;
+};
+
+export const setStreamCache = (fileId, buffer) => {
+  if (buffer.length > STREAM_CACHE_MAX_BYTES) return; // Too big — don't cache
+  // Evict oldest entries if over budget
+  while (streamCacheTotalBytes + buffer.length > STREAM_CACHE_MAX_TOTAL && streamCache.size > 0) {
+    const [oldestKey, oldestEntry] = streamCache.entries().next().value;
+    streamCacheTotalBytes -= oldestEntry.size;
+    streamCache.delete(oldestKey);
+  }
+  streamCache.set(fileId, { buffer, cachedAt: Date.now(), size: buffer.length });
+  streamCacheTotalBytes += buffer.length;
+};
 
 // Global client cache to avoid connecting/reconnecting on every range request
 const clientCache = new Map(); // userId -> { client, lastUsed }
 const requestQueue = new Map(); // userId -> { current, queue }
 
-const limitConcurrency = async (userId, task) => {
+export const limitConcurrency = async (userId, task) => {
   if (!requestQueue.has(userId)) {
     requestQueue.set(userId, { current: 0, queue: [] });
   }
   
   const state = requestQueue.get(userId);
-  const MAX_CONCURRENT = 5; // Allow up to 5 concurrent Telegram tasks per user
+  const MAX_CONCURRENT = 15; // 🚀 Increased to 15 for ultra-fast parallel streams
 
   const runTask = async (taskToRun, resolve, reject) => {
     state.current++;
@@ -66,16 +128,25 @@ export const getClient = async (userId, user) => {
   const apiId = user.apiId || Number(process.env.TELEGRAM_API_ID);
   const apiHash = user.apiHash || process.env.TELEGRAM_API_HASH;
   const client = new TelegramClient(new StringSession(user.sessionData), apiId, apiHash, { 
-    connectionRetries: 20,
-    useIPV6: false, // Keep false unless confirmed network support
+    connectionRetries: 50,
+    timeout: 60, // 🚀 Increased to 60 seconds for slow Telegram responses
+    useIPV6: false,
     autoReconnect: true,
     floodSleepThreshold: 300,
-    maxConcurrentDownloads: 10, // Higher concurrency for super-fast loads
+    maxConcurrentDownloads: 15,
     deviceModel: "TeleDrive Turbo v2",
     systemVersion: "High-Speed"
   });
   
   await client.connect();
+  
+  // Suppress "TIMEOUT" noise from the update loop which we don't strictly need for stateless file operations
+  client.addEventHandler(() => {}, new Api.UpdateShortMessage()); 
+  client.setLogLevel("error"); 
+  client.on("error", (err) => {
+    if (err.message && (err.message.includes("TIMEOUT") || err.message.includes("updates") || err.message.includes("disconnected"))) return;
+    console.error("Telegram Client Error:", err);
+  });
   
   clientCache.set(userId, { client, lastUsed: Date.now() });
   return client;
@@ -148,13 +219,30 @@ const syncChatFiles = async (userId, folder, client) => {
   }
 };
 
-// Cleanup old clients every 5 minutes
+// ─────────────────────────────────────────────────────────────────────────────
+// 🧹 Cache eviction — runs every 60 seconds
+// ─────────────────────────────────────────────────────────────────────────────
 setInterval(() => {
   const now = Date.now();
+
+  // Evict disconnected / idle Telegram clients (5 min idle)
   for (const [userId, cached] of clientCache.entries()) {
-    if (now - cached.lastUsed > 300000) { // 5 minutes idle
+    if (now - cached.lastUsed > 300000) {
       cached.client.disconnect();
       clientCache.delete(userId);
+    }
+  }
+
+  // Evict stale message metadata cache entries
+  for (const [key, entry] of messageMetaCache.entries()) {
+    if (now - entry.cachedAt > MESSAGE_CACHE_TTL) messageMetaCache.delete(key);
+  }
+
+  // Evict stale stream cache entries
+  for (const [fileId, entry] of streamCache.entries()) {
+    if (now - entry.cachedAt > STREAM_CACHE_TTL) {
+      streamCacheTotalBytes -= entry.size;
+      streamCache.delete(fileId);
     }
   }
 }, 60000);
@@ -264,9 +352,24 @@ router.get('/:folderId?', async (req, res) => {
 
     const folders = await Folder.find(foldersQuery).sort({ name: 1 });
 
+    // Calculate breadcrumbs for navigation persistence
+    let bc = [{ id: 'root', name: 'Drive' }];
+    if (folderId) {
+      const currentFolder = await Folder.findById(folderId);
+      if (currentFolder) {
+        if (currentFolder.folderType === 'channel' || currentFolder.folderType === 'group') {
+          bc.push({ id: folderId, name: currentFolder.name });
+        } else {
+          // For personal folders, we could trace parents, but for now we at least show current
+          bc.push({ id: folderId, name: currentFolder.name });
+        }
+      }
+    }
+
     res.json({ 
       files, 
       folders,
+      breadcrumbs: bc,
       pagination: {
         page,
         limit,
@@ -705,153 +808,211 @@ router.post('/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-// Get file preview/download
-// Get file preview/download with Range support
+// ─────────────────────────────────────────────────────────────────────────────
+// 🚀 TURBO STREAM ENDPOINT — Range support + 3-layer caching + parallel fetch
+// ─────────────────────────────────────────────────────────────────────────────
 router.get('/:fileId/:mode', async (req, res) => {
   try {
     const { fileId, mode } = req.params;
     if (!['preview', 'download'].includes(mode)) return res.status(400).send('Invalid mode');
-    
+
     const userId = req.user.userId;
 
     const file = await File.findOne({ _id: fileId, ownerId: userId });
     if (!file) return res.status(404).json({ error: 'File not found' });
-    
-    if (!file.chunks || file.chunks.length === 0) {
-        return res.status(404).send('File has no data.');
-    }
+    if (!file.chunks || file.chunks.length === 0) return res.status(404).send('File has no data.');
 
-    const range = req.headers.range;
+    // Update lastViewedAt non-blocking
+    File.updateOne({ _id: fileId }, { lastViewedAt: new Date() }).catch(() => {});
+
+    const range     = req.headers.range;
     const totalSize = file.size;
 
     let mime = file.mimeType || 'application/octet-stream';
     const fileName = file.name.toLowerCase();
-    if (fileName.endsWith('.pdf')) mime = 'application/pdf';
-    else if (fileName.endsWith('.mkv')) mime = 'video/x-matroska';
-    else if (fileName.endsWith('.mp4')) mime = 'video/mp4';
+    if (fileName.endsWith('.pdf'))  mime = 'application/pdf';
+    if (fileName.endsWith('.mkv'))  mime = 'video/x-matroska';
+    if (fileName.endsWith('.mp4'))  mime = 'video/mp4';
+    if (fileName.endsWith('.webm')) mime = 'video/webm';
 
-    const user = await User.findById(userId);
-    const client = await getClient(userId.toString(), user);
-
-    let targetChat = "me";
+    // ── Resolve target chat ───────────────────────────────────────────────
+    let targetChat = 'me';
     if (file.folderId) {
-        const folder = await Folder.findById(file.folderId);
-        if (folder && folder.chatId) {
-            targetChat = folder.chatId;
-        }
+      const folder = await Folder.findById(file.folderId).lean();
+      if (folder?.chatId) targetChat = folder.chatId;
     }
 
-    // Pre-fetch all messages to avoid repeated API calls in the loop
-    const messageIds = [...new Set(file.chunks.map(c => parseInt(c.telegramFileId, 10)))];
-    const messagesList = await client.getMessages(targetChat, { ids: messageIds });
-    const messageMap = new Map(messagesList.filter(m => m).map(m => [m.id, m]));
+    // ── SPEED LAYER 2 CHECK — serve from RAM buffer for small files ───────
+    const cachedBuffer = getStreamCache(fileId);
+    if (cachedBuffer && totalSize > 0) {
+      if (range && mode === 'preview') {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end   = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+        res.status(206).set({
+          'Content-Range':  `bytes ${start}-${end}/${totalSize}`,
+          'Accept-Ranges':  'bytes',
+          'Content-Length': (end - start) + 1,
+          'Content-Type':   mime,
+          'X-Cache':        'RAM-HIT',
+        });
+        return res.end(cachedBuffer.slice(start, end + 1));
+      }
+      res.set({
+        'Content-Type':        mime,
+        'Content-Disposition': mode === 'download' ? `attachment; filename="${file.name}"` : 'inline',
+        'Accept-Ranges':       'bytes',
+        'Content-Length':      totalSize,
+        'X-Cache':             'RAM-HIT',
+      });
+      return res.end(cachedBuffer);
+    }
 
-    // Handle 0-size files (e.g., photos from legacy sync) by bypassing Range logic
+    // ── Connect to Telegram ───────────────────────────────────────────────
+    const user   = await User.findById(userId).lean();
+    const client = await getClient(userId.toString(), user);
+
+    // ── SPEED LAYER 1 — parallel message metadata fetch with per-key cache ─
+    const uniqueMessageIds = [...new Set(file.chunks.map(c => parseInt(c.telegramFileId, 10)))];
+
+    // For each message ID, check in-memory cache first; only fetch missing ones
+    const toFetch = uniqueMessageIds.filter(id => !getCachedMessage(userId, targetChat, id));
+    if (toFetch.length > 0) {
+      const fetched = await client.getMessages(targetChat, { ids: toFetch });
+      for (const msg of fetched) {
+        if (msg) setCachedMessage(userId, targetChat, msg.id, msg);
+      }
+    }
+    const messageMap = new Map(
+      uniqueMessageIds
+        .map(id => [id, getCachedMessage(userId, targetChat, id)])
+        .filter(([, m]) => m)
+    );
+
+    // ─────────────────────────────────────────────────────────────────────
+    // RANGE REQUEST — video seeking / partial content (206)
+    // ─────────────────────────────────────────────────────────────────────
     if (range && mode === 'preview' && totalSize > 0) {
-      const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+      const parts     = range.replace(/bytes=/, '').split('-');
+      const start     = parseInt(parts[0], 10);
+      const end       = parts[1] ? parseInt(parts[1], 10) : Math.min(start + 10 * 1024 * 1024 - 1, totalSize - 1);
       const chunksize = (end - start) + 1;
 
       res.status(206).set({
-        'Content-Range': `bytes ${start}-${end}/${totalSize}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunksize,
-        'Content-Type': mime,
-        'Cache-Control': 'no-cache',
-        'X-Content-Type-Options': 'nosniff'
+        'Content-Range':        `bytes ${start}-${end}/${totalSize}`,
+        'Accept-Ranges':        'bytes',
+        'Content-Length':       chunksize,
+        'Content-Type':         mime,
+        'Cache-Control':        'no-cache',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Cache':              'MISS',
       });
 
       let currentOffset = 0;
       try {
+        // ── SPEED LAYER 3 — parallel chunk downloads within the range ────
+        const rangeChunks = [];
         for (const chunk of file.chunks) {
-          if (res.destroyed) break;
           const chunkStart = currentOffset;
-          const chunkEnd = currentOffset + chunk.size - 1;
-
+          const chunkEnd   = currentOffset + chunk.size - 1;
           if (start <= chunkEnd && end >= chunkStart) {
-            const messageId = parseInt(chunk.telegramFileId, 10);
-            const msg = messageMap.get(messageId);
-            
-            if (msg && msg.media) {
-              const relativeStart = Math.max(0, start - chunkStart);
-              const relativeEnd = Math.min(chunk.size - 1, end - chunkStart);
-              const length = (relativeEnd - relativeStart) + 1;
-
-              const buffer = await limitConcurrency(userId.toString(), async () => {
-                return await client.downloadFile(msg.media, {
-                    offset: BigInt(relativeStart),
-                    limit: length,
-                    workers: 8,
-                    requestSize: 512 * 1024,
-                });
+            const msg = messageMap.get(parseInt(chunk.telegramFileId, 10));
+            if (msg?.media) {
+              rangeChunks.push({
+                msg,
+                relativeStart: Math.max(0, start - chunkStart),
+                relativeEnd:   Math.min(chunk.size - 1, end - chunkStart),
               });
-              if (buffer && !res.destroyed) {
-                res.write(buffer);
-              }
             }
           }
           currentOffset += chunk.size;
         }
+
+        // Fetch all needed sub-ranges in parallel (up to 4 at once)
+        const PARALLEL = 4;
+        for (let i = 0; i < rangeChunks.length; i += PARALLEL) {
+          if (res.destroyed) break;
+          const batch = rangeChunks.slice(i, i + PARALLEL);
+          const buffers = await Promise.all(batch.map(({ msg, relativeStart, relativeEnd }) =>
+            limitConcurrency(userId.toString(), () =>
+              client.downloadFile(msg.media, {
+                offset:      BigInt(relativeStart),
+                limit:       (relativeEnd - relativeStart) + 1,
+                workers:     16,          // 🚀 max GramJS workers
+                requestSize: 1024 * 1024, // 1 MB per DC request
+              })
+            )
+          ));
+          for (const buf of buffers) {
+            if (buf && !res.destroyed) res.write(buf);
+          }
+        }
       } catch (streamErr) {
-        console.error("Stream error during range request:", streamErr);
+        console.error('Range stream error:', streamErr.message);
       } finally {
         if (!res.destroyed) res.end();
       }
+
     } else {
-      const responseHeaders = {
-        'Content-Type': mime,
+      // ─────────────────────────────────────────────────────────────────
+      // FULL FILE STREAM — download mode or no Range header
+      // ─────────────────────────────────────────────────────────────────
+      res.set({
+        'Content-Type':        mime,
         'Content-Disposition': mode === 'download' ? `attachment; filename="${file.name}"` : 'inline',
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': 'no-cache',
-      };
-      
-      if (totalSize > 0) {
-        responseHeaders['Content-Length'] = totalSize;
-      }
-      
-      res.set(responseHeaders);
+        'Accept-Ranges':       'bytes',
+        'Cache-Control':       'no-cache',
+        'X-Cache':             'MISS',
+        ...(totalSize > 0 ? { 'Content-Length': totalSize } : {}),
+      });
+
+      // Collect buffers so we can optionally cache small files after streaming
+      const collectedBuffers = [];
+      const shouldCache = totalSize > 0 && totalSize <= STREAM_CACHE_MAX_BYTES;
 
       try {
+        // ── SPEED LAYER 3 — stream each TG chunk in parallel 4MB sub-parts
         for (const chunk of file.chunks) {
           if (res.destroyed) break;
-          const messageId = parseInt(chunk.telegramFileId, 10);
-          const msg = messageMap.get(messageId);
-          
-          if (msg && msg.media) {
-            // If we have no size, we must use downloadMedia (buffers the whole thing, but works for photos)
-            if (chunk.size === 0 || totalSize === 0) {
-                const buffer = await limitConcurrency(userId.toString(), async () => {
-                    return await client.downloadMedia(msg, { workers: 4 });
-                });
-                if (buffer && !res.destroyed) res.write(buffer);
-            } else {
-                // Stream large files in 1MB parts to ensure first-byte responsiveness
-                const CHUNK_STEP = 1024 * 1024;
-                for (let offset = 0; offset < chunk.size; offset += CHUNK_STEP) {
-                    if (res.destroyed) break;
-                    const limit = Math.min(CHUNK_STEP, chunk.size - offset);
-                    
-                    const buffer = await limitConcurrency(userId.toString(), async () => {
-                        return await client.downloadFile(msg.media, {
-                            offset: BigInt(offset),
-                            limit: limit,
-                            workers: 4
-                        });
-                    });
-                    if (buffer && !res.destroyed) res.write(buffer);
-                }
+          const msg = messageMap.get(parseInt(chunk.telegramFileId, 10));
+          if (!msg?.media) continue;
+
+          if (chunk.size === 0 || totalSize === 0) {
+            // Legacy photo / size-unknown file
+            const buf = await limitConcurrency(userId.toString(), () =>
+              client.downloadMedia(msg, { workers: 8 })
+            );
+            if (buf && !res.destroyed) { res.write(buf); if (shouldCache) collectedBuffers.push(buf); }
+          } else {
+            // Stream in 4 MB steps — each step uses parallel DC workers
+            const STEP = 4 * 1024 * 1024;
+            for (let offset = 0; offset < chunk.size; offset += STEP) {
+              if (res.destroyed) break;
+              const limit = Math.min(STEP, chunk.size - offset);
+              const buf = await limitConcurrency(userId.toString(), () =>
+                client.downloadFile(msg.media, {
+                  offset:      BigInt(offset),
+                  limit,
+                  workers:     16,
+                  requestSize: 1024 * 1024,
+                })
+              );
+              if (buf && !res.destroyed) { res.write(buf); if (shouldCache) collectedBuffers.push(buf); }
             }
           }
         }
       } catch (fullErr) {
-        console.error("Error during full file streaming:", fullErr);
+        console.error('Full stream error:', fullErr.message);
       } finally {
         if (!res.destroyed) res.end();
+        // Populate RAM cache for next request
+        if (shouldCache && collectedBuffers.length > 0) {
+          setStreamCache(fileId, Buffer.concat(collectedBuffers));
+        }
       }
     }
   } catch (error) {
-    console.error("Stream error:", error);
+    console.error('Stream error:', error);
     if (!res.headersSent) res.status(500).json({ error: error.message });
     else res.end();
   }

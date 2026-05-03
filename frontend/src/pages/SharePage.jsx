@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   Folder, Download, FileText, Image as ImageIcon, Video, Music,
   Archive, FileCode, File as FileIcon, Eye, AlertCircle,
-  RefreshCcw, X, ChevronLeft, ChevronRight, Play, ZoomIn
+  RefreshCcw, X, ChevronLeft, ChevronRight, Play, Pause, ZoomIn, Share2, Check, Volume2, VolumeX, Maximize
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
@@ -97,11 +97,156 @@ const FileCard = ({ file, shareToken, onClick }) => {
   );
 };
 
-// ── Lightbox ──────────────────────────────────────────────────────────────────
+import { ProfessionalLoader } from '../components';
+
+// ── Custom Video Player Component ───────────────────────────────────────────
+const CustomVideoPlayer = ({ src, title }) => {
+  const videoRef = useRef(null);
+  const containerRef = useRef(null);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [progress, setProgress] = useState(0);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadProgress, setLoadProgress] = useState(0);
+  const controlsTimeout = useRef(null);
+
+  useEffect(() => {
+    const handleMouseMove = () => {
+      setShowControls(true);
+      clearTimeout(controlsTimeout.current);
+      controlsTimeout.current = setTimeout(() => setShowControls(false), 2500);
+    };
+    document.addEventListener('mousemove', handleMouseMove);
+    return () => document.removeEventListener('mousemove', handleMouseMove);
+  }, []);
+
+  const togglePlay = (e) => {
+    if (e) e.stopPropagation();
+    if (!videoRef.current) return;
+    if (videoRef.current.paused) {
+      videoRef.current.play();
+      setIsPlaying(true);
+    } else {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    }
+  };
+
+  const handleTimeUpdate = () => {
+    if (!videoRef.current) return;
+    const progress = (videoRef.current.currentTime / videoRef.current.duration) * 100;
+    setProgress(progress || 0);
+  };
+
+  const toggleMute = (e) => {
+    e.stopPropagation();
+    if (!videoRef.current) return;
+    videoRef.current.muted = !videoRef.current.muted;
+    setIsMuted(!isMuted);
+  };
+
+  const toggleFullscreen = (e) => {
+    e.stopPropagation();
+    if (!document.fullscreenElement) {
+      containerRef.current?.requestFullscreen().catch(err => console.error(err));
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen();
+      setIsFullscreen(false);
+    }
+  };
+
+  const handleSeek = (e) => {
+    e.stopPropagation();
+    if (!videoRef.current || !isFinite(videoRef.current.duration)) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const clickedValue = (x / rect.width) * videoRef.current.duration;
+    if (isFinite(clickedValue)) {
+      videoRef.current.currentTime = clickedValue;
+    }
+  };
+
+  const handleProgress = () => {
+    if (videoRef.current && videoRef.current.buffered.length > 0) {
+      const bufferedEnd = videoRef.current.buffered.end(videoRef.current.buffered.length - 1);
+      const duration = videoRef.current.duration;
+      if (duration > 0) {
+        setLoadProgress(Math.round((bufferedEnd / duration) * 100));
+      }
+    }
+  };
+
+  return (
+    <div ref={containerRef} className="relative w-full h-full flex items-center justify-center bg-black rounded-2xl overflow-hidden shadow-2xl shadow-black/50 border border-white/5 group" onClick={togglePlay}>
+      <video
+        ref={videoRef}
+        src={src}
+        autoPlay
+        onTimeUpdate={handleTimeUpdate}
+        onProgress={handleProgress}
+        onWaiting={() => setIsLoading(true)}
+        onCanPlay={() => setIsLoading(false)}
+        onLoadStart={() => setIsLoading(true)}
+        onEnded={() => setIsPlaying(false)}
+        className="w-full max-h-[80vh] outline-none"
+      />
+      
+      {/* Loading Overlay */}
+      {isLoading && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-xl z-20">
+          <ProfessionalLoader progress={loadProgress} dark={true} />
+        </div>
+      )}
+      
+      {/* Central Play/Pause Button */}
+      <div className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-all duration-300 ${!isPlaying ? 'opacity-100 scale-100' : 'opacity-0 scale-150'}`}>
+        <div className="w-20 h-20 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center border border-white/10 shadow-2xl">
+          {!isPlaying ? <Play className="w-10 h-10 text-white ml-1" /> : <Pause className="w-10 h-10 text-white" />}
+        </div>
+      </div>
+      
+      {/* Controls Overlay */}
+      <div 
+        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent pt-20 pb-6 px-8 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0'}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="w-full h-1.5 bg-white/20 rounded-full mb-6 cursor-pointer relative hover:h-2 transition-all" onClick={handleSeek}>
+          <div className="absolute top-0 left-0 h-full bg-blue-500 rounded-full" style={{ width: `${progress}%` }}></div>
+          <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow" style={{ left: `${progress}%`, marginLeft: '-6px' }}></div>
+        </div>
+        
+        <div className="flex items-center justify-between text-white">
+          <div className="flex items-center gap-6">
+            <button onClick={togglePlay} className="hover:text-blue-400 transition transform hover:scale-110">
+              {isPlaying ? <Pause className="w-7 h-7" /> : <Play className="w-7 h-7" />}
+            </button>
+            <button onClick={toggleMute} className="hover:text-blue-400 transition transform hover:scale-110">
+              {isMuted ? <VolumeX className="w-6 h-6" /> : <Volume2 className="w-6 h-6" />}
+            </button>
+            <div className="h-4 w-px bg-white/20 mx-2"></div>
+            <span className="text-[15px] font-medium opacity-90 truncate max-w-[250px]">{title}</span>
+          </div>
+          
+          <div className="flex items-center gap-4">
+            <button onClick={toggleFullscreen} className="hover:text-blue-400 transition transform hover:scale-110">
+              <Maximize className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Web Player (Lightbox) ───────────────────────────────────────────────────
 const Lightbox = ({ file, shareToken, files, onClose }) => {
   const idx = files.findIndex(f => f._id === file._id);
-  const [current, setCurrent] = useState(idx);
-  const cur = files[current];
+  const [current, setCurrent] = useState(idx >= 0 ? idx : 0);
+  const [copied, setCopied] = useState(false);
+  const cur = files[current] || file;
 
   const prev = useCallback(() => setCurrent(i => Math.max(0, i - 1)), []);
   const next = useCallback(() => setCurrent(i => Math.min(files.length - 1, i + 1)), [files.length]);
@@ -116,100 +261,121 @@ const Lightbox = ({ file, shareToken, files, onClose }) => {
     return () => window.removeEventListener('keydown', onKey);
   }, [prev, next, onClose]);
 
+  const handleShare = () => {
+    const link = `${window.location.origin}/share/${shareToken}`;
+    navigator.clipboard.writeText(link);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   const previewSrc = `${API_BASE}/shares/${shareToken}/files/${cur._id}/preview`;
+  const downloadUrl = `${API_BASE}/shares/${shareToken}/files/${cur._id}/download`;
 
   return (
     <div
-      className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-sm flex flex-col"
+      className="fixed inset-0 z-[200] bg-black/95 backdrop-blur-xl flex flex-col font-sans animate-in fade-in duration-300"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 flex-shrink-0">
-        <p className="text-white/80 font-medium text-[15px] truncate max-w-sm">{cur.name}</p>
+      <div className="flex items-center justify-between px-6 py-4 flex-shrink-0 bg-gradient-to-b from-black/60 to-transparent">
+        <p className="text-white/90 font-medium text-[15px] truncate max-w-[50%]">{cur.name}</p>
         <div className="flex items-center gap-3">
+          <button
+            onClick={handleShare}
+            className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-sm font-bold rounded-xl transition flex items-center gap-2"
+          >
+            {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4" />}
+            {copied ? 'Copied' : 'Share'}
+          </button>
           <a
-            href={`${API_BASE}/shares/${shareToken}/files/${cur._id}/download`}
+            href={downloadUrl}
             target="_blank"
             rel="noreferrer"
-            className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white text-sm font-bold rounded-xl transition flex items-center gap-2"
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl transition flex items-center gap-2 shadow-lg shadow-blue-500/20"
             onClick={e => e.stopPropagation()}
           >
             <Download className="w-4 h-4" /> Download
           </a>
-          <button onClick={onClose} className="p-2 text-white/50 hover:text-white hover:bg-white/10 rounded-full transition">
+          <button onClick={onClose} className="p-2 ml-2 text-white/50 hover:text-white hover:bg-white/10 rounded-full transition">
             <X className="w-6 h-6" />
           </button>
         </div>
       </div>
 
-      {/* Media */}
+      {/* Media Center */}
       <div className="flex-1 flex items-center justify-center px-16 min-h-0 relative">
-        {/* Prev */}
-        {current > 0 && (
+        {/* Prev Button */}
+        {current > 0 && files.length > 1 && (
           <button
             onClick={prev}
-            className="absolute left-4 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full transition"
+            className="absolute left-6 p-4 bg-white/5 hover:bg-white/15 text-white rounded-full transition backdrop-blur-md"
           >
-            <ChevronLeft className="w-6 h-6" />
+            <ChevronLeft className="w-7 h-7" />
           </button>
         )}
 
-        <div className="max-w-5xl w-full max-h-full flex items-center justify-center">
+        <div className="max-w-6xl w-full max-h-full flex items-center justify-center p-4">
           {isImage(cur.mimeType, cur.name) ? (
             <img
               key={cur._id}
               src={previewSrc}
               alt={cur.name}
-              className="max-w-full max-h-[75vh] object-contain rounded-xl shadow-2xl"
+              className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl shadow-black/50"
             />
           ) : isVideo(cur.mimeType, cur.name) ? (
-            <video
-              key={cur._id}
-              src={previewSrc}
-              controls
-              autoPlay
-              className="max-w-full max-h-[75vh] rounded-xl shadow-2xl outline-none"
+            <CustomVideoPlayer 
+              src={previewSrc} 
+              title={cur.name} 
             />
           ) : isAudio(cur.mimeType, cur.name) ? (
-            <div className="bg-gray-900 p-10 rounded-3xl text-center">
-              <Music className="w-16 h-16 text-purple-400 mx-auto mb-4" />
-              <p className="text-white font-bold mb-6 text-lg">{cur.name}</p>
-              <audio src={previewSrc} controls autoPlay className="w-80" />
+            <div className="bg-[#111] p-12 rounded-[32px] text-center w-full max-w-md shadow-2xl border border-white/10">
+              <div className="w-24 h-24 bg-purple-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                <Music className="w-12 h-12 text-purple-400" />
+              </div>
+              <p className="text-white font-bold mb-8 text-xl truncate px-4">{cur.name}</p>
+              <audio src={previewSrc} controls autoPlay className="w-full custom-audio-player" />
             </div>
           ) : (
-            <div className="bg-white/5 rounded-3xl p-12 text-center border border-white/10">
-              {getIcon(cur.mimeType, cur.name, 'lg')}
-              <p className="text-white/70 mt-4 mb-6">{cur.name}</p>
+            <div className="bg-[#111] rounded-[40px] p-14 text-center border border-white/10 max-w-md w-full shadow-2xl">
+              <div className="w-24 h-24 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                {getIcon(cur.mimeType, cur.name, 'lg')}
+              </div>
+              <p className="text-white/90 text-xl font-bold mb-2 truncate">{cur.name}</p>
+              <p className="text-white/40 text-sm mb-8">{formatSize(cur.size)}</p>
               <a
-                href={`${API_BASE}/shares/${shareToken}/files/${cur._id}/download`}
+                href={downloadUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-700 transition"
+                className="inline-flex items-center gap-2 px-8 py-4 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-700 transition w-full justify-center text-lg"
               >
-                <Download className="w-4 h-4" /> Download
+                <Download className="w-5 h-5" /> Download File
               </a>
             </div>
           )}
         </div>
 
-        {/* Next */}
-        {current < files.length - 1 && (
+        {/* Next Button */}
+        {current < files.length - 1 && files.length > 1 && (
           <button
             onClick={next}
-            className="absolute right-4 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full transition"
+            className="absolute right-6 p-4 bg-white/5 hover:bg-white/15 text-white rounded-full transition backdrop-blur-md"
           >
-            <ChevronRight className="w-6 h-6" />
+            <ChevronRight className="w-7 h-7" />
           </button>
         )}
       </div>
 
-      {/* Counter */}
-      <div className="text-center py-4 text-white/40 text-sm font-medium">
-        {current + 1} / {files.length}
-      </div>
+      {/* Footer Counter */}
+      {files.length > 1 && (
+        <div className="text-center py-5 text-white/30 text-sm font-bold tracking-widest uppercase bg-gradient-to-t from-black/60 to-transparent">
+          {current + 1} / {files.length}
+        </div>
+      )}
     </div>
   );
 };
+
+
 
 // ── Main SharePage ────────────────────────────────────────────────────────────
 export default function SharePage() {
@@ -246,25 +412,22 @@ export default function SharePage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#F8F9FC] flex items-center justify-center">
-        <div className="text-center">
-          <RefreshCcw className="w-10 h-10 text-blue-500 animate-spin mx-auto mb-4" />
-          <p className="text-gray-500 font-medium">Loading shared content…</p>
-        </div>
+      <div className="min-h-screen bg-[#F8F9FC] flex items-center justify-center p-6">
+        <ProfessionalLoader dark={false} />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-[#F8F9FC] flex items-center justify-center p-6">
-        <div className="bg-white rounded-[32px] shadow-xl border border-gray-100 p-12 max-w-md w-full text-center">
-          <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
-            <AlertCircle className="w-8 h-8 text-red-500" />
+      <div className="min-h-screen bg-[#F8F9FC] flex items-center justify-center p-6 animate-in zoom-in-95 duration-300">
+        <div className="bg-white rounded-[40px] shadow-2xl border border-gray-100 p-12 max-w-md w-full text-center">
+          <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-8">
+            <AlertCircle className="w-10 h-10 text-red-500" />
           </div>
-          <h2 className="text-2xl font-black text-gray-900 mb-3">Link Unavailable</h2>
-          <p className="text-gray-500 leading-relaxed">{error}</p>
-          <a href="/" className="mt-8 inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-700 transition shadow-lg shadow-blue-200">
+          <h2 className="text-2xl font-black text-gray-900 mb-4">Link Unavailable</h2>
+          <p className="text-gray-500 leading-relaxed mb-10">{error}</p>
+          <a href="/" className="inline-flex items-center gap-3 px-8 py-4 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-700 transition shadow-xl shadow-blue-500/20">
             Open TeleDrive
           </a>
         </div>
@@ -378,11 +541,14 @@ export default function SharePage() {
             <div className="bg-white rounded-[40px] border border-gray-100 overflow-hidden shadow-lg">
               {/* Thumbnail preview */}
               {(isImage(file.mimeType, file.name) || isVideo(file.mimeType, file.name)) && (
-                <div className="relative bg-gray-100 aspect-video flex items-center justify-center overflow-hidden">
+                <div className="relative bg-gray-50 aspect-video flex items-center justify-center overflow-hidden border-b border-gray-100">
+                  <div className="absolute inset-0 flex items-center justify-center opacity-30">
+                    {getIcon(file.mimeType, file.name, 'lg')}
+                  </div>
                   <img
                     src={`${API_BASE}/shares/${token}/thumbnail`}
                     alt={file.name}
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-cover relative z-10"
                     onError={e => { e.target.style.display = 'none'; }}
                   />
                   {isVideo(file.mimeType, file.name) && (
@@ -415,14 +581,12 @@ export default function SharePage() {
                       <Download className="w-5 h-5" /> Download File
                     </a>
                   )}
-                  <a
-                    href={`${API_BASE}/shares/${token}/preview`}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    onClick={() => setLightboxFile(file)}
                     className="flex items-center justify-center gap-2 w-full py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-900 font-bold rounded-2xl transition text-[15px]"
                   >
                     <Eye className="w-5 h-5" /> Preview
-                  </a>
+                  </button>
                 </div>
               </div>
             </div>
@@ -430,12 +594,12 @@ export default function SharePage() {
         ) : null}
       </main>
 
-      {/* Lightbox */}
+      {/* Web Player Overlay */}
       {lightboxFile && (
         <Lightbox
           file={lightboxFile}
           shareToken={token}
-          files={allFiles.filter(f => isImage(f.mimeType, f.name) || isVideo(f.mimeType, f.name) || isAudio(f.mimeType, f.name))}
+          files={shareData?.isFolder ? allFiles : [shareData.file]}
           onClose={() => setLightboxFile(null)}
         />
       )}

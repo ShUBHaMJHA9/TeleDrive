@@ -59,6 +59,11 @@ export const fileAPI = {
     API.patch(`/files/${fileId}`, { isTrashed: true }),
   moveToTrashFolder: (folderId) =>
     API.patch(`/folders/${folderId}`, { isTrashed: true }),
+  // Aliases used by bulk action handler
+  trashFile: (fileId) =>
+    API.patch(`/files/${fileId}`, { isTrashed: true }),
+  trashFolder: (folderId) =>
+    API.patch(`/folders/${folderId}`, { isTrashed: true }),
   restoreFile: (fileId) =>
     API.patch(`/files/${fileId}`, { isTrashed: false }),
   restoreFolder: (folderId) =>
@@ -143,6 +148,7 @@ export const shareAPI = {
 export const userAPI = {
   getProfile: () => API.get('/me'),
   logout: () => API.post('/logout'),
+  getFolderMembers: (folderId) => API.get(`/files/${folderId}/members`),
 };
 
 export default API;

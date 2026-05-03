@@ -138,6 +138,7 @@ router.post('/:uploadId/commit', async (req, res) => {
     
     const chunks = [];
     const uploadPromises = [];
+    const fileHandle = await fs.open(tempFile, 'r');
     
     // Function to upload a single part
     const uploadPart = async (i) => {
@@ -248,8 +249,23 @@ router.post('/import-url', async (req, res) => {
 
     if (!url) return res.status(400).json({ error: 'URL is required' });
 
-    let fileName = url.split('/').pop().split('?')[0];
-    if (!fileName) fileName = 'imported_file';
+    // 🚀 IMPROVED INITIAL FILENAME GUESS
+    const urlObj = new URL(url);
+    let fileName = urlObj.pathname.split('/').pop();
+    
+    // Fallback to title/name parameter if present
+    const queryParams = urlObj.searchParams;
+    const hint = queryParams.get('title') || queryParams.get('name') || queryParams.get('filename');
+    if (hint) {
+      fileName = hint.includes('.') ? hint : `${hint}.mp4`; // Default to .mp4 if no extension
+    }
+
+    if (!fileName || fileName === 'dl.php' || fileName === 'download') {
+      fileName = 'Imported_File.mp4';
+    }
+    
+    // Clean up filename (remove illegal chars)
+    fileName = fileName.replace(/[<>:"/\\|?*]/g, '_').trim();
 
     const uploadId = uuidv4();
     const tempFile = getTempFilePath(uploadId);
@@ -258,16 +274,17 @@ router.post('/import-url', async (req, res) => {
     const session = new UploadSession({
       ownerId: userId,
       uploadId,
-      fileName: fileName,
+      fileName: fileName, // Initial guess
       fileSize: 0,
       status: 'downloading',
       folderId: folderId || null,
     });
     await session.save();
 
-    // Respond with uploadId immediately so frontend can poll
+    // Respond with details immediately
     res.json({
       uploadId,
+      fileName,
       message: 'Import started',
     });
 
@@ -276,6 +293,7 @@ router.post('/import-url', async (req, res) => {
       try {
         // Download file
         console.log(`Starting download from ${url}...`);
+        const urlObj = new URL(url);
         const response = await axios({
           method: 'GET',
           url: url,
@@ -284,11 +302,39 @@ router.post('/import-url', async (req, res) => {
           maxRedirects: 5,
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': '*/*'
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Referer': `${urlObj.protocol}//${urlObj.host}/`,
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
           }
         });
 
         const mimeType = response.headers['content-type'] || 'application/octet-stream';
+        
+        // 🚀 SMART FILENAME DISCOVERY (Header Layer)
+        const contentDisposition = response.headers['content-disposition'];
+        if (contentDisposition) {
+            // Support both filename= and filename*=
+            const fileNameMatch = contentDisposition.match(/filename\*?=['"]?(?:UTF-8'')?([^'";]+)['"]?/i);
+            if (fileNameMatch && fileNameMatch[1]) {
+                const discoveredName = decodeURIComponent(fileNameMatch[1]).replace(/[<>:"/\\|?*]/g, '_');
+                if (discoveredName && discoveredName !== fileName) {
+                  fileName = discoveredName;
+                  session.fileName = fileName;
+                  await session.save();
+                }
+            }
+        } else {
+            // Fallback: If no filename in header, but we have a mime-type, ensure extension
+            if (fileName.indexOf('.') === -1) {
+                const ext = mimeType.split('/')[1] || 'bin';
+                fileName = `${fileName}.${ext}`;
+                session.fileName = fileName;
+                await session.save();
+            }
+        }
+
         const tempDir = path.dirname(tempFile);
         await fs.mkdir(tempDir, { recursive: true });
 
@@ -300,27 +346,40 @@ router.post('/import-url', async (req, res) => {
         session.status = 'uploading';
         await session.save();
 
+        // Safety sleep to ensure file handle is released on Windows
+        await new Promise(resolve => setTimeout(resolve, 500));
+
         const user = await User.findById(userId);
         const apiId = user.apiId || Number(process.env.TELEGRAM_API_ID);
         const apiHash = user.apiHash || process.env.TELEGRAM_API_HASH;
         
         const client = new TelegramClient(new StringSession(user.sessionData), apiId, apiHash, { 
-          connectionRetries: 10,
-          timeout: 600000
+          connectionRetries: 50,
+          timeout: 60000,
+          maxConcurrentDownloads: 1,
+          deviceModel: "TeleDrive Turbo Importer"
         });
         
         await client.connect();
         
         const isMedia = mimeType.startsWith('image/') || mimeType.startsWith('video/');
 
-        // Pass the file path directly to GramJS to avoid OOM for large files
+        // Pass the file path explicitly via CustomFile to ensure GramJS can read it correctly
         const toUpload = await client.uploadFile({
-            file: tempFile, // GramJS handles file paths efficiently
-            workers: 16,
+            file: new CustomFile(fileName, stats.size, tempFile),
+            workers: 32, // 🚀 Turbo Import Workers
             onProgress: async (p) => {
-                session.uploadedChunks = [Math.round(p * 100)];
-                session.status = 'uploading';
-                await session.save();
+                const percent = Math.round(p * 100);
+                // Only save if progress changed to reduce DB load and avoid ParallelSaveError
+                if (session.uploadedChunks[0] !== percent) {
+                    session.uploadedChunks = [percent];
+                    session.status = 'uploading';
+                    // Use findOneAndUpdate to avoid parallel save issues with multiple workers
+                    await UploadSession.updateOne(
+                        { _id: session._id },
+                        { $set: { uploadedChunks: [percent], status: 'uploading' } }
+                    ).catch(() => {}); // Ignore minor update collisions
+                }
             }
         });
 

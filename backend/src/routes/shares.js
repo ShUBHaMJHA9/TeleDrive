@@ -1,4 +1,9 @@
 import express from 'express';
+import path from 'path';
+import { 
+  getClient, limitConcurrency, getCachedMessage, setCachedMessage, 
+  getStreamCache, setStreamCache, STREAM_CACHE_MAX_BYTES 
+} from './files.js';
 import { Share, File, Folder, User } from '../models/index.js';
 import { v4 as uuidv4 } from 'uuid';
 import { authenticateJWT } from '../middleware/auth.js';
@@ -127,17 +132,25 @@ router.get('/:token/folder-contents', async (req, res) => {
   }
 });
 
+// ─── Recursive Chat ID Resolver ──────────────────────────────────────────────
+const getChatId = async (folderId) => {
+  if (!folderId) return 'me';
+  let currentFolder = await Folder.findById(folderId).lean();
+  while (currentFolder) {
+    if (currentFolder.chatId) return currentFolder.chatId;
+    if (!currentFolder.parentId) break;
+    currentFolder = await Folder.findById(currentFolder.parentId).lean();
+  }
+  return 'me';
+};
+
 // ─── Thumbnail helper (no-auth, uses share token) ────────────────────────────
 const serveThumbnail = async (req, res, file, owner) => {
   try {
     const { getClient } = await import('./files.js');
     const client = await getClient(owner._id.toString(), owner);
 
-    let targetChat = 'me';
-    if (file.folderId) {
-      const folder = await Folder.findById(file.folderId);
-      if (folder && folder.chatId) targetChat = folder.chatId;
-    }
+    const targetChat = await getChatId(file.folderId);
 
     // Try custom thumbnailId first, then fall back to first chunk
     const telegramId = file.thumbnailId || (file.chunks && file.chunks[0]?.telegramFileId);
@@ -148,12 +161,19 @@ const serveThumbnail = async (req, res, file, owner) => {
       return res.status(404).json({ error: 'Media not found' });
     }
 
-    // Download a small thumbnail (use thumb size for speed)
+    const media = messages[0].media;
+    let thumbToDownload = undefined;
+
+    if (media?.photo?.sizes) {
+      thumbToDownload = media.photo.sizes[Math.min(1, media.photo.sizes.length - 1)];
+    } else if (media?.document?.thumbs) {
+      thumbToDownload = media.document.thumbs[Math.min(1, media.document.thumbs.length - 1)];
+    }
+
+    // Download a small thumbnail
     const buffer = await client.downloadMedia(messages[0], {
       workers: 2,
-      thumb: messages[0].media?.photo?.sizes
-        ? messages[0].media.photo.sizes[Math.min(1, messages[0].media.photo.sizes.length - 1)]
-        : undefined,
+      thumb: thumbToDownload,
     });
 
     if (!buffer) return res.status(404).json({ error: 'Could not generate thumbnail' });
@@ -172,76 +192,189 @@ const serveThumbnail = async (req, res, file, owner) => {
 
 // ─── Shared Telegram media stream helper ─────────────────────────────────────
 const streamFile = async (res, file, owner, rangeHeader, mode) => {
-  const { getClient } = await import('./files.js');
-  const client = await getClient(owner._id.toString(), owner);
+  try {
+    const userId = owner._id.toString();
+    const client = await getClient(userId, owner);
+    const targetChat = await getChatId(file.folderId);
+    const totalSize = file.size;
+    const fileId = file._id.toString();
 
-  let targetChat = 'me';
-  if (file.folderId) {
-    const folder = await Folder.findById(file.folderId);
-    if (folder && folder.chatId) targetChat = folder.chatId;
-  }
+    let mime = file.mimeType || 'application/octet-stream';
+    const fileName = file.name.toLowerCase();
+    if (fileName.endsWith('.pdf'))  mime = 'application/pdf';
+    if (fileName.endsWith('.mkv'))  mime = 'video/x-matroska';
+    if (fileName.endsWith('.mp4'))  mime = 'video/mp4';
+    if (fileName.endsWith('.webm')) mime = 'video/webm';
 
-  const mime = file.mimeType || 'application/octet-stream';
-  const totalSize = file.size;
+    // ── 1. RAM Cache Check ───────────────────────────────────────────────
+    const cachedBuffer = getStreamCache(fileId);
+    if (cachedBuffer && totalSize > 0) {
+      if (rangeHeader && mode !== 'download') {
+        const parts = rangeHeader.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end   = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+        res.status(206).set({
+          'Content-Range':  `bytes ${start}-${end}/${totalSize}`,
+          'Accept-Ranges':  'bytes',
+          'Content-Length': (end - start) + 1,
+          'Content-Type':   mime,
+          'X-Cache':        'RAM-HIT',
+        });
+        return res.end(cachedBuffer.slice(start, end + 1));
+      }
+      res.set({
+        'Content-Type':        mime,
+        'Content-Disposition': mode === 'download' ? `attachment; filename="${file.name}"` : 'inline',
+        'Accept-Ranges':       'bytes',
+        'Content-Length':      totalSize,
+        'X-Cache':             'RAM-HIT',
+      });
+      return res.end(cachedBuffer);
+    }
 
-  if (rangeHeader && mode !== 'download') {
-    const parts = rangeHeader.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : Math.min(start + 1024 * 1024 - 1, totalSize - 1);
-    const chunksize = end - start + 1;
+    // ── 2. Pre-fetch Metadata (Turbo Layer 1) ───────────────────────────
+    const uniqueMessageIds = [...new Set(file.chunks.map(c => parseInt(c.telegramFileId, 10)))];
+    const toFetch = uniqueMessageIds.filter(id => !getCachedMessage(userId, targetChat, id));
+    if (toFetch.length > 0) {
+      try {
+        let fetched = [];
+        try {
+          fetched = await client.getMessages(targetChat, { ids: toFetch });
+        } catch (e) {
+          // Failover: Try 'me' if channel fetch fails
+          if (targetChat !== 'me') {
+            fetched = await client.getMessages('me', { ids: toFetch });
+          } else throw e;
+        }
 
-    res.status(206).set({
-      'Content-Range': `bytes ${start}-${end}/${totalSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': chunksize,
-      'Content-Type': mime,
-      'Cache-Control': 'no-cache',
-    });
+        if (Array.isArray(fetched)) {
+          for (const msg of fetched) {
+            if (msg) setCachedMessage(userId, targetChat, msg.id, msg);
+          }
+        }
+      } catch (err) {
+        console.error("Turbo Metadata fetch error:", err.message);
+      }
+    }
+    const messageMap = new Map(
+      uniqueMessageIds
+        .map(id => [id, getCachedMessage(userId, targetChat, id)])
+        .filter(([, m]) => m)
+    );
 
-    let currentOffset = 0;
-    try {
+    // ── 3. Optimized Streaming ──────────────────────────────────────────
+    if (rangeHeader && mode !== 'download' && totalSize > 0) {
+      const parts     = rangeHeader.replace(/bytes=/, '').split('-');
+      const start     = parseInt(parts[0], 10);
+      const end       = parts[1] ? parseInt(parts[1], 10) : Math.min(start + 10 * 1024 * 1024 - 1, totalSize - 1);
+      const chunksize = (end - start) + 1;
+
+      res.status(206).set({
+        'Content-Range':        `bytes ${start}-${end}/${totalSize}`,
+        'Accept-Ranges':        'bytes',
+        'Content-Length':       chunksize,
+        'Content-Type':         mime,
+        'Cache-Control':        'no-cache',
+        'X-Cache':              'MISS',
+      });
+
+      let currentOffset = 0;
+      const rangeChunks = [];
       for (const chunk of file.chunks) {
-        if (res.destroyed) break;
-        const chunkEnd = currentOffset + chunk.size - 1;
-        if (start <= chunkEnd && end >= currentOffset) {
-          const messageId = parseInt(chunk.telegramFileId, 10);
-          const messages = await client.getMessages(targetChat, { ids: [messageId] });
-          if (messages && messages[0]?.media) {
-            const relativeStart = Math.max(0, start - currentOffset);
-            const relativeEnd = Math.min(chunk.size - 1, end - currentOffset);
-            const length = relativeEnd - relativeStart + 1;
-            const buffer = await client.downloadFile(messages[0].media, {
-              offset: BigInt(relativeStart), limit: length, workers: 8, requestSize: 256 * 1024,
+        const chunkStart = currentOffset;
+        const chunkEnd   = currentOffset + chunk.size - 1;
+        if (start <= chunkEnd && end >= chunkStart) {
+          const msg = messageMap.get(parseInt(chunk.telegramFileId, 10));
+          if (msg?.media) {
+            rangeChunks.push({
+              msg,
+              relativeStart: Math.max(0, start - chunkStart),
+              relativeEnd:   Math.min(chunk.size - 1, end - chunkStart),
             });
-            if (buffer && !res.destroyed) res.write(buffer);
           }
         }
         currentOffset += chunk.size;
       }
-    } finally {
-      if (!res.destroyed) res.end();
-    }
-  } else {
-    res.set({
-      'Content-Type': mime,
-      'Content-Length': totalSize,
-      'Content-Disposition': mode === 'download' ? `attachment; filename="${file.name}"` : 'inline',
-      'Accept-Ranges': 'bytes',
-      'Cache-Control': 'no-cache',
-    });
-    try {
-      for (const chunk of file.chunks) {
+
+      const PARALLEL = 4;
+      for (let i = 0; i < rangeChunks.length; i += PARALLEL) {
         if (res.destroyed) break;
-        const messageId = parseInt(chunk.telegramFileId, 10);
-        const messages = await client.getMessages(targetChat, { ids: [messageId] });
-        if (messages && messages[0]?.media) {
-          const buffer = await client.downloadFile(messages[0].media, { workers: 16, requestSize: 1024 * 1024 });
-          if (buffer && !res.destroyed) res.write(buffer);
+        const batch = rangeChunks.slice(i, i + PARALLEL);
+        const buffers = await Promise.all(batch.map(({ msg, relativeStart, relativeEnd }) =>
+          limitConcurrency(userId, () =>
+            client.downloadFile(msg.media, {
+              offset:      BigInt(relativeStart),
+              limit:       (relativeEnd - relativeStart) + 1,
+              workers:     16,
+              requestSize: 2 * 1024 * 1024, // 🚀 Increased to 2MB for speed
+            })
+          )
+        ));
+        for (const buf of buffers) {
+          if (buf && !res.destroyed) {
+            res.write(buf);
+          }
         }
       }
-    } finally {
       if (!res.destroyed) res.end();
+    } else {
+      res.set({
+        'Content-Type':        mime,
+        'Content-Disposition': mode === 'download' ? `attachment; filename="${file.name}"` : 'inline',
+        'Accept-Ranges':       'bytes',
+        'Cache-Control':       'no-cache',
+        'X-Cache':             'MISS',
+        ...(totalSize > 0 ? { 'Content-Length': totalSize } : {}),
+      });
+
+      const collectedBuffers = [];
+      const shouldCache = totalSize > 0 && totalSize <= STREAM_CACHE_MAX_BYTES;
+
+      // 🚀 Turbo Layer 3 — Parallel Full Stream with Sliding Window
+      const allSubChunks = [];
+      for (const chunk of file.chunks) {
+        const msg = messageMap.get(parseInt(chunk.telegramFileId, 10));
+        if (!msg?.media) continue;
+        const STEP = 2 * 1024 * 1024;
+        for (let offset = 0; offset < chunk.size; offset += STEP) {
+          allSubChunks.push({
+            msg,
+            offset: BigInt(offset),
+            limit: Math.min(STEP, chunk.size - offset)
+          });
+        }
+      }
+
+      const PARALLEL_FULL = 6; 
+      for (let i = 0; i < allSubChunks.length; i += PARALLEL_FULL) {
+        if (res.destroyed) break;
+        const batch = allSubChunks.slice(i, i + PARALLEL_FULL);
+        const buffers = await Promise.all(batch.map(({ msg, offset, limit }) =>
+          limitConcurrency(userId, () =>
+            client.downloadFile(msg.media, {
+              offset,
+              limit,
+              workers: 16,
+              requestSize: 1024 * 1024
+            })
+          )
+        ));
+        for (const buf of buffers) {
+          if (buf && !res.destroyed) {
+            res.write(buf);
+            if (shouldCache) collectedBuffers.push(buf);
+          }
+        }
+      }
+      if (!res.destroyed) res.end();
+      if (shouldCache && collectedBuffers.length > 0) {
+        setStreamCache(fileId, Buffer.concat(collectedBuffers));
+      }
     }
+  } catch (err) {
+    console.error("Turbo Share Stream Error:", err);
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+    else res.end();
   }
 };
 
@@ -258,13 +391,13 @@ const handleSharedFileStream = async (req, res, mode) => {
 
     // If fetching a file inside a shared folder, verify it belongs to that folder
     if (req.params.fileId && share.folderId) {
-      const file = await File.findOne({ _id: req.params.fileId, folderId: share.folderId });
-      if (!file) return res.status(403).json({ error: 'File not in shared folder' });
+      const folderFile = await File.findOne({ _id: req.params.fileId, folderId: share.folderId });
+      if (!folderFile) return res.status(403).json({ error: 'File not in shared folder' });
     }
 
-    const file   = await File.findById(fileId);
+    const file   = await File.findById(fileId).lean();
     if (!file)   return res.status(404).json({ error: 'File not found' });
-    const owner  = await User.findById(share.ownerId);
+    const owner  = await User.findById(share.ownerId).lean();
     if (!owner)  return res.status(404).json({ error: 'Owner not found' });
 
     await streamFile(res, file, owner, req.headers.range, mode);
@@ -287,9 +420,9 @@ router.get('/:token/thumbnail', async (req, res) => {
     const fileId = share.fileId;
     if (!fileId) return res.status(400).json({ error: 'Not a file share' });
 
-    const file   = await File.findById(fileId);
+    const file   = await File.findById(fileId).lean();
     if (!file)   return res.status(404).json({ error: 'File not found' });
-    const owner  = await User.findById(share.ownerId);
+    const owner  = await User.findById(share.ownerId).lean();
     if (!owner)  return res.status(404).json({ error: 'Owner not found' });
 
     await serveThumbnail(req, res, file, owner);
@@ -307,11 +440,12 @@ router.get('/:token/files/:fileId/thumbnail', async (req, res) => {
     if (!share || (share.expiresAt && share.expiresAt < new Date())) {
       return res.status(404).json({ error: 'Share not found or expired' });
     }
+    
+    // Verify file belongs to shared folder
     if (!share.folderId) return res.status(400).json({ error: 'Not a folder share' });
-
     const file = await File.findOne({ _id: req.params.fileId, folderId: share.folderId });
-    if (!file) return res.status(403).json({ error: 'File not in shared folder' });
-
+    if (!file) return res.status(404).json({ error: 'File not found in share' });
+    
     const owner = await User.findById(share.ownerId);
     if (!owner) return res.status(404).json({ error: 'Owner not found' });
 
@@ -320,5 +454,6 @@ router.get('/:token/files/:fileId/thumbnail', async (req, res) => {
     if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
+
 
 export default router;

@@ -12,6 +12,7 @@ import {
   Clock, Star, CheckCircle2, AlertCircle, XCircle, ChevronDown, Settings, Zap, Users, Check, Terminal, Lock
 } from 'lucide-react';
 import { Toaster, toast } from 'react-hot-toast';
+import ProfessionalLoader from './ProfessionalLoader';
 
 const CustomVideoPlayer = ({ src, title }) => {
   const videoRef = useRef(null);
@@ -21,6 +22,8 @@ const CustomVideoPlayer = ({ src, title }) => {
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadProgress, setLoadProgress] = useState(0);
   const controlsTimeout = useRef(null);
 
   useEffect(() => {
@@ -77,17 +80,38 @@ const CustomVideoPlayer = ({ src, title }) => {
     }
   };
 
+  const handleProgress = () => {
+    if (videoRef.current && videoRef.current.buffered.length > 0) {
+      const bufferedEnd = videoRef.current.buffered.end(videoRef.current.buffered.length - 1);
+      const duration = videoRef.current.duration;
+      if (duration > 0) {
+        setLoadProgress(Math.round((bufferedEnd / duration) * 100));
+      }
+    }
+  };
+
   return (
-    <div ref={containerRef} className="relative w-full h-full flex items-center justify-center bg-transparent group" onClick={togglePlay}>
+    <div ref={containerRef} className="relative w-full h-full flex items-center justify-center bg-black rounded-2xl overflow-hidden group" onClick={togglePlay}>
       <video
         ref={videoRef}
         src={src}
         autoPlay
         onTimeUpdate={handleTimeUpdate}
+        onProgress={handleProgress}
+        onWaiting={() => setIsLoading(true)}
+        onCanPlay={() => setIsLoading(false)}
+        onLoadStart={() => setIsLoading(true)}
         onEnded={() => setIsPlaying(false)}
-        className="max-w-full max-h-full object-contain outline-none shadow-2xl"
+        className="max-w-full max-h-full object-contain outline-none"
         style={{ maxHeight: isFullscreen ? '100vh' : '85vh' }}
       />
+
+      {/* Loading Overlay */}
+      {isLoading && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-xl z-20">
+          <ProfessionalLoader progress={loadProgress} dark={true} />
+        </div>
+      )}
       
       {/* Controls Overlay */}
       <div 
@@ -141,6 +165,17 @@ const PremiumFileManager = ({ onLogout }) => {
     const params = new URLSearchParams(window.location.search);
     return params.get('tab') || 'files';
   });
+
+  // ── URL helpers: encode MongoDB IDs so raw IDs never appear in the browser bar
+  const encodeId = (id) => id ? btoa(id).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_') : null;
+  const decodeId = (encoded) => {
+    if (!encoded) return null;
+    try {
+      // Restore base64 padding and characters
+      const pad = encoded.length % 4 === 0 ? '' : '='.repeat(4 - (encoded.length % 4));
+      return atob(encoded.replace(/-/g, '+').replace(/_/g, '/') + pad);
+    } catch { return encoded; } // Fallback: treat as raw ID for backward compat
+  };
   
   const [currentPage, setCurrentPage] = useState(() => {
     const params = new URLSearchParams(window.location.search);
@@ -161,6 +196,7 @@ const PremiumFileManager = ({ onLogout }) => {
   const [showShareSettings, setShowShareSettings] = useState(null);
   const [showShareModal, setShowShareModal] = useState(null); // { item, shareUrl }
   const [isCreatingShare, setIsCreatingShare] = useState(false);
+  const [shareAccessType, setShareAccessType] = useState('public');
   const [previewFile, setPreviewFile] = useState(null);
   
   const [showCreateMenu, setShowCreateMenu] = useState(false);
@@ -198,26 +234,23 @@ const PremiumFileManager = ({ onLogout }) => {
   const [folderType, setFolderType] = useState('personal'); // 'personal', 'channel', 'group'
   const [pagination, setPagination] = useState({ totalFiles: 0, totalPages: 1 });
 
-  // Senior Performance Optimization: Sync State to URL
+  // Senior Performance Optimization: Sync State to URL (with encoded folder ID)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (currentTab) params.set('tab', currentTab);
-    if (currentFolderId) params.set('folder', currentFolderId);
-    else params.delete('folder');
+    if (currentFolderId) params.set('f', encodeId(currentFolderId));
+    else params.delete('f');
+    params.delete('folder'); // Remove old plaintext param if present
     if (currentPage > 1) params.set('page', currentPage);
     else params.delete('page');
-    
+
     const newUrl = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState({}, '', newUrl);
   }, [currentTab, currentFolderId, currentPage]);
 
-  // Initial URL Read
+  // Sync State to URL — handled by store initialization for the first load to prevent reset
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const urlFolder = params.get('folder');
-    if (urlFolder && urlFolder !== currentFolderId) {
-      setCurrentFolderId(urlFolder);
-    }
+    // This effect handles keeping the breadcrumbs and UI in sync if external navigation happens
   }, []);
 
   const allItems = [
@@ -309,28 +342,23 @@ const PremiumFileManager = ({ onLogout }) => {
   const getFileIcon = (item, size = "w-8 h-8", isGrid = false) => {
     if (item.isFolder || item.folderType) {
       if (['channel', 'group'].includes(item.folderType) && item._id) {
+        const FallbackIcon = item.folderType === 'channel' ? Zap : Users;
+        const colorClass = item.folderType === 'channel' ? 'text-emerald-500 bg-emerald-50' : 'text-orange-500 bg-orange-50';
+        
         return (
-          <div className={`${isGrid ? 'w-full h-full' : size} ${isGrid ? '' : 'rounded-xl'} overflow-hidden flex-shrink-0 bg-gray-50 flex items-center justify-center`}>
+          <div className={`${isGrid ? 'w-full h-full' : size} ${isGrid ? '' : 'rounded-xl'} overflow-hidden flex-shrink-0 relative`}>
+            {/* Fallback Icon Layer */}
+            <div className={`absolute inset-0 flex items-center justify-center ${colorClass} z-0`}>
+               <FallbackIcon className={isGrid ? "w-2/3 h-2/3" : "w-1/2 h-1/2"} />
+            </div>
+            {/* Image Layer */}
             <img 
               src={`http://localhost:3000/api/files/folders/${item._id}/icon?token=${localStorage.getItem('token')}`} 
-              className="w-full h-full object-cover"
+              className="absolute inset-0 w-full h-full object-cover z-10"
               alt=""
               loading="lazy"
               onError={(e) => {
-                e.target.onerror = null;
                 e.target.style.display = 'none';
-                // Show fallback icon
-                const parent = e.target.parentElement;
-                parent.innerHTML = '';
-                const svgContainer = document.createElement('div');
-                svgContainer.className = 'w-full h-full flex items-center justify-center ' + (item.folderType === 'channel' ? 'bg-emerald-50' : 'bg-orange-50');
-                
-                if (item.folderType === 'channel') {
-                    svgContainer.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-2/3 h-2/3 text-emerald-500"><path d="M4 14.5 12 3l1 10.5h7L12 21l-1-10.5H4Z"/></svg>`;
-                } else {
-                    svgContainer.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-2/3 h-2/3 text-orange-500"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`;
-                }
-                parent.appendChild(svgContainer);
               }}
             />
           </div>
@@ -352,6 +380,8 @@ const PremiumFileManager = ({ onLogout }) => {
     if (/\.(zip|rar|7z|tar|gz)$/i.test(name)) return <Archive className={`${size} text-amber-500`} fill="#fef3c7" />;
     if (/\.(csv|xlsx|xls|ods)$/i.test(name)) return <Database className={`${size} text-blue-400`} fill="#dbeafe" />;
     if (name.endsWith('.txt') || name.endsWith('.md')) return <FileText className={`${size} text-gray-500`} fill="#f3f4f6" />;
+    if (/\.(apk|ipa|app|pkg)$/i.test(name)) return <Cpu className={`${size} text-indigo-500`} fill="#e0e7ff" />;
+    if (/\.(exe|msi|dmg|iso|bin)$/i.test(name)) return <Terminal className={`${size} text-slate-600`} fill="#f1f5f9" />;
     
     return <FileIcon className={`${size} text-gray-400`} />;
   };
@@ -393,6 +423,9 @@ const PremiumFileManager = ({ onLogout }) => {
       }
       setFiles(res.data.files || []);
       setFolders(res.data.folders || []);
+      if (res.data.breadcrumbs) {
+        updateBreadcrumbs(res.data.breadcrumbs);
+      }
       if (res.data.pagination) {
         setPagination(res.data.pagination);
       } else {
@@ -428,8 +461,8 @@ const PremiumFileManager = ({ onLogout }) => {
   const renderFolderTile = (folder, index) => (
     <div 
       key={folder._id} 
-      onDoubleClick={() => handleDoubleClick(folder)}
-      onContextMenu={(e) => handleContextMenu(e, folder)}
+      onDoubleClick={() => handleDoubleClick({ ...folder, isFolder: true })}
+      onContextMenu={(e) => handleContextMenu(e, { ...folder, isFolder: true })}
       className="group relative bg-white border border-gray-200 rounded-2xl p-4 hover:shadow-xl hover:border-blue-200 transition-all cursor-pointer select-none flex flex-col items-center justify-center text-center animate-in fade-in zoom-in-95"
       style={{ animationDelay: `${index * 50}ms` }}
     >
@@ -518,6 +551,22 @@ const PremiumFileManager = ({ onLogout }) => {
     }
   };
 
+  const submitCreateShare = async (settings) => {
+    setIsCreatingShare(true);
+    try {
+      const payload = showShareSettings.isFolder || showShareSettings.folderType
+        ? { folderId: showShareSettings._id, ...settings }
+        : { fileId: showShareSettings._id, ...settings };
+      const res = await shareAPI.createShare(payload);
+      setShowShareSettings(null);
+      setShowShareModal({ item: showShareSettings, shareUrl: res.data.shareUrl });
+    } catch (err) {
+      toast.error('Failed to create share link: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setIsCreatingShare(false);
+    }
+  };
+
   const handleContextMenu = (e, item) => {
     e.preventDefault();
     e.stopPropagation();
@@ -590,7 +639,9 @@ const PremiumFileManager = ({ onLogout }) => {
         speed: 'Connecting...', 
         status: 'uploading',
         cancel: false,
-        isImport: true
+        isImport: true,
+        url,
+        folderId: currentFolderId === 'root' ? null : currentFolderId
       };
       
       setUploadQueue(prev => [newUpload, ...prev]);
@@ -599,11 +650,13 @@ const PremiumFileManager = ({ onLogout }) => {
       setImportUrlInput('');
 
       try {
-        await uploadAPI.importUrl(url, currentFolderId === 'root' ? null : currentFolderId);
+        const res = await uploadAPI.importUrl(url, currentFolderId === 'root' ? null : currentFolderId);
+        const realFileName = res.data.fileName || fileName;
+        
         setUploadQueue(prev => prev.map(up => 
-          up.id === uploadId ? { ...up, status: 'completed', progress: 100, speed: 'Imported' } : up
+          up.id === uploadId ? { ...up, name: realFileName, status: 'completed', progress: 100, speed: 'Imported' } : up
         ));
-        toast.success(`Imported: ${fileName}`);
+        toast.success(`Imported: ${realFileName}`);
         fetchContents();
       } catch (err) {
         setUploadQueue(prev => prev.map(up => 
@@ -679,7 +732,9 @@ const PremiumFileManager = ({ onLogout }) => {
         progress: 0, 
         speed: '0 KB/s', 
         status: 'uploading',
-        cancel: false
+        cancel: false,
+        file,
+        folderId: currentFolderId === 'root' ? null : currentFolderId
       };
       
       setUploadQueue(prev => [newUpload, ...prev]);
@@ -745,6 +800,90 @@ const PremiumFileManager = ({ onLogout }) => {
     ));
   };
 
+  const retryUpload = async (id) => {
+    const failedUpload = uploadQueue.find(u => u.id === id);
+    if (!failedUpload) return;
+    
+    // Remove the old failed attempt
+    setUploadQueue(prev => prev.filter(u => u.id !== id));
+    
+    if (failedUpload.isImport) {
+      const retryId = Math.random().toString(36).substring(7);
+      const newUpload = { ...failedUpload, id: retryId, status: 'uploading', progress: 10, speed: 'Connecting...', cancel: false };
+      setUploadQueue(prev => [newUpload, ...prev]);
+      
+      try {
+        await uploadAPI.importUrl(failedUpload.url, failedUpload.folderId);
+        setUploadQueue(prev => prev.map(up => 
+          up.id === retryId ? { ...up, status: 'completed', progress: 100, speed: 'Imported' } : up
+        ));
+        toast.success(`Imported: ${failedUpload.name}`);
+        fetchContents();
+      } catch (err) {
+        setUploadQueue(prev => prev.map(up => 
+          up.id === retryId ? { ...up, status: 'failed', speed: 'Failed' } : up
+        ));
+      }
+    } else {
+      const file = failedUpload.file;
+      const retryId = Math.random().toString(36).substring(7);
+      const newUpload = { ...failedUpload, id: retryId, status: 'uploading', progress: 0, speed: '0 KB/s', cancel: false };
+      setUploadQueue(prev => [newUpload, ...prev]);
+      
+      try {
+        const CHUNK_SIZE = 1024 * 1024;
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        const initRes = await uploadAPI.initUpload(file.name, file.size, file.type, failedUpload.folderId);
+        const serverUploadId = initRes.data.uploadId;
+        let uploadedBytes = 0;
+        let startTime = Date.now();
+        
+        for (let i = 0; i < totalChunks; i++) {
+          let isCancelled = false;
+          setUploadQueue(prev => {
+            const up = prev.find(u => u.id === retryId);
+            if (up?.cancel) isCancelled = true;
+            return prev;
+          });
+          if (isCancelled) break;
+
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(file.size, start + CHUNK_SIZE);
+          const chunk = file.slice(start, end);
+          await uploadAPI.uploadChunk(serverUploadId, i, chunk);
+          uploadedBytes += (end - start);
+          const progress = Math.round((uploadedBytes / file.size) * 100);
+          const elapsed = (Date.now() - startTime) / 1000;
+          const speed = (uploadedBytes / 1024 / elapsed).toFixed(1);
+          setUploadQueue(prev => prev.map(up => 
+            up.id === retryId ? { ...up, progress, speed: speed > 1024 ? (speed/1024).toFixed(1) + ' MB/s' : speed + ' KB/s' } : up
+          ));
+        }
+        
+        // Final check before commit
+        let finalCancel = false;
+        setUploadQueue(prev => {
+          const up = prev.find(u => u.id === retryId);
+          if (up?.cancel) finalCancel = true;
+          return prev;
+        });
+        
+        if (!finalCancel) {
+          await uploadAPI.commitUpload(serverUploadId);
+          setUploadQueue(prev => prev.map(up => 
+            up.id === retryId ? { ...up, status: 'completed', progress: 100 } : up
+          ));
+          fetchContents();
+        }
+      } catch (err) {
+        setUploadQueue(prev => prev.map(up => 
+          up.id === retryId ? { ...up, status: 'failed' } : up
+        ));
+        toast.error(`Retry failed: ${file.name}`);
+      }
+    }
+  };
+
   const handleDragOver = (e) => {
     e.preventDefault();
     setIsDragging(true);
@@ -785,18 +924,19 @@ const PremiumFileManager = ({ onLogout }) => {
     setActiveMenu(null);
     
     if (action === 'trash') {
-      if (item.isFolder) await trashFolder(item._id);
+      // Check isFolder OR folderType — raw DB folder objects may not have isFolder set
+      if (item.isFolder || item.folderType) await trashFolder(item._id);
       else await trashFile(item._id);
       fetchContents();
     } else if (action === 'restore') {
-      if (item.isFolder) await restoreFolder(item._id);
+      if (item.isFolder || item.folderType) await restoreFolder(item._id);
       else await restoreFile(item._id);
       fetchContents();
     } else if (action === 'delete') {
       setShowDeleteModal(item);
     } else if (action === 'star') {
       try {
-        if (item.isFolder) await fileAPI.starFolder(item._id, !item.isStarred);
+        if (item.isFolder || item.folderType) await fileAPI.starFolder(item._id, !item.isStarred);
         else await fileAPI.starFile(item._id, !item.isStarred);
         toast.success(item.isStarred ? "Removed from Starred" : "Added to Starred");
         fetchContents();
@@ -807,18 +947,8 @@ const PremiumFileManager = ({ onLogout }) => {
       setRenameInput(item.name);
       setShowRenameModal(item);
     } else if (action === 'share') {
-      setIsCreatingShare(true);
-      try {
-        const payload = item.isFolder || item.folderType
-          ? { folderId: item._id, type: 'public' }
-          : { fileId: item._id, type: 'public' };
-        const res = await shareAPI.createShare(payload);
-        setShowShareModal({ item, shareUrl: res.data.shareUrl });
-      } catch (err) {
-        toast.error('Failed to create share link: ' + (err.response?.data?.error || err.message));
-      } finally {
-        setIsCreatingShare(false);
-      }
+      setShareAccessType('public');
+      setShowShareSettings(item);
     } else if (action === 'info') {
       setShowInfoModal(item);
     } else if (action === 'cut' || action === 'copy') {
@@ -1159,20 +1289,22 @@ const PremiumFileManager = ({ onLogout }) => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 md:gap-4 w-full md:w-auto pb-1 md:pb-0">
-            {['files', 'recent', 'starred', 'trash'].includes(currentTab) && (
+            {['files', 'recent', 'starred', 'trash', 'channels', 'groups'].includes(currentTab) && (
               <div className="flex items-center gap-2">
-                <select 
-                  value={sortBy} 
+                <select
+                  value={sortBy}
                   onChange={(e) => setSortBy(e.target.value)}
                   className="bg-gray-100 border-none text-sm text-gray-700 rounded-lg py-2 pl-3 pr-8 focus:ring-0 cursor-pointer"
                 >
                   <option value="name">Name</option>
                   <option value="date">Date Modified</option>
-                  <option value="size">Size</option>
+                  {/* Size only makes sense for files, not folder lists */}
+                  {!['channels', 'groups'].includes(currentTab) && <option value="size">Size</option>}
                 </select>
-                <button 
+                <button
                   onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
                   className="p-2 text-gray-500 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                  title={sortOrder === 'asc' ? 'Sort Ascending' : 'Sort Descending'}
                 >
                   {sortOrder === 'asc' ? <ArrowDownAZ className="w-4 h-4" /> : <ArrowUpZA className="w-4 h-4" />}
                 </button>
@@ -1830,41 +1962,69 @@ const PremiumFileManager = ({ onLogout }) => {
               </div>
             ) : (['channels', 'groups'].includes(currentTab) && !currentFolderId) ? (
               <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <div>
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shadow-sm">
-                      {currentTab === 'channels' ? <Zap className="w-5 h-5 text-blue-600" /> : <Users className="w-5 h-5 text-blue-600" />}
-                    </div>
-                    <h2 className="text-xl font-bold text-gray-900 capitalize">My {currentTab}</h2>
-                  </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
-                    {folders.filter(f => f.isOwner && (!searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()))).length === 0 ? (
-                      <div className="col-span-full py-12 text-center text-gray-400 bg-gray-50/50 rounded-2xl border-2 border-dashed border-gray-100">
-                        {searchQuery ? "No matching folders found" : `No ${currentTab} owned by you`}
-                      </div>
-                    ) : (
-                      folders.filter(f => f.isOwner && (!searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()))).map((folder, i) => renderFolderTile(folder, i))
-                    )}
-                  </div>
-                </div>
 
-                <div>
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center shadow-sm">
-                      <Share2 className="w-5 h-5 text-purple-600" />
-                    </div>
-                    <h2 className="text-xl font-bold text-gray-900 capitalize">Joined {currentTab}</h2>
-                  </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
-                    {folders.filter(f => !f.isOwner && (!searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()))).length === 0 ? (
-                      <div className="col-span-full py-12 text-center text-gray-400 bg-gray-50/50 rounded-2xl border-2 border-dashed border-gray-100">
-                        {searchQuery ? "No matching folders found" : `No joined ${currentTab} available`}
+                {/* ── Sort helper for channel/group folder lists ── */}
+                {(() => {
+                  const sortFolders = (list) => [...list].sort((a, b) => {
+                    let cmp = 0;
+                    if (sortBy === 'name')  cmp = a.name.localeCompare(b.name);
+                    if (sortBy === 'date')  cmp = new Date(a.createdAt) - new Date(b.createdAt);
+                    return sortOrder === 'asc' ? cmp : -cmp;
+                  });
+
+                  const owned  = sortFolders(folders.filter(f =>  f.isOwner && (!searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()))));
+                  const joined = sortFolders(folders.filter(f => !f.isOwner && (!searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()))));
+
+                  return (
+                    <>
+                      {/* My channels/groups */}
+                      <div>
+                        <div className="flex items-center justify-between mb-6">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shadow-sm">
+                              {currentTab === 'channels' ? <Zap className="w-5 h-5 text-blue-600" /> : <Users className="w-5 h-5 text-blue-600" />}
+                            </div>
+                            <div>
+                              <h2 className="text-xl font-bold text-gray-900 capitalize">My {currentTab}</h2>
+                              <p className="text-[12px] text-gray-400 font-medium">{owned.length} {currentTab}</p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
+                          {owned.length === 0 ? (
+                            <div className="col-span-full py-12 text-center text-gray-400 bg-gray-50/50 rounded-2xl border-2 border-dashed border-gray-100">
+                              {searchQuery ? 'No matching folders found' : `No ${currentTab} owned by you`}
+                            </div>
+                          ) : (
+                            owned.map((folder, i) => renderFolderTile(folder, i))
+                          )}
+                        </div>
                       </div>
-                    ) : (
-                      folders.filter(f => !f.isOwner && (!searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()))).map((folder, i) => renderFolderTile(folder, i))
-                    )}
-                  </div>
-                </div>
+
+                      {/* Joined channels/groups */}
+                      <div>
+                        <div className="flex items-center gap-3 mb-6">
+                          <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center shadow-sm">
+                            <Share2 className="w-5 h-5 text-purple-600" />
+                          </div>
+                          <div>
+                            <h2 className="text-xl font-bold text-gray-900 capitalize">Joined {currentTab}</h2>
+                            <p className="text-[12px] text-gray-400 font-medium">{joined.length} {currentTab}</p>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
+                          {joined.length === 0 ? (
+                            <div className="col-span-full py-12 text-center text-gray-400 bg-gray-50/50 rounded-2xl border-2 border-dashed border-gray-100">
+                              {searchQuery ? 'No matching folders found' : `No joined ${currentTab} available`}
+                            </div>
+                          ) : (
+                            joined.map((folder, i) => renderFolderTile(folder, i))
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             ) : (
               <>
@@ -1897,23 +2057,41 @@ const PremiumFileManager = ({ onLogout }) => {
                           
                           <div className="w-full h-full">
                             {item.isFolder || item.folderType ? getFileIcon(item, "w-20 h-20", true) : (
-                              <div className="w-full h-full">
-                                {(isImageFile(item) || isVideoFile(item)) ? (
-                                  <img 
-                                    src={`http://localhost:3000/api/files/${item._id}/thumbnail?token=${localStorage.getItem('token')}`} 
-                                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" 
-                                    alt={item.name} 
-                                    loading="lazy"
-                                    decoding="async"
-                                  />
-                                ) : (
-                                  <div className="w-full h-full flex items-center justify-center bg-gray-50/50">
-                                    <div className="transform scale-[2.0] flex items-center justify-center opacity-80 group-hover:opacity-100 transition-opacity">
-                                      {getFileIcon(item, "w-16 h-16")}
+                                <div className="w-full h-full relative">
+                                {(() => {
+                                  // Show thumbnail for image/video — also catch docs uploaded with generic MIME (mkv, mp4, etc.)
+                                  const hasVideoExt = /\.(mp4|mkv|mov|avi|flv|wmv|webm|m4v|3gp)$/i.test(item.name);
+                                  const showThumb = isImageFile(item) || isVideoFile(item) || hasVideoExt;
+                                  
+                                  // Always render the icon as a fallback layer underneath
+                                  const fallbackIcon = (
+                                    <div className="absolute inset-0 flex items-center justify-center bg-gray-50/50 z-0">
+                                      <div className="transform scale-[2.0] flex items-center justify-center opacity-80 group-hover:opacity-100 transition-opacity">
+                                        {getFileIcon(item, "w-16 h-16")}
+                                      </div>
                                     </div>
-                                  </div>
-                                )}
-                              </div>
+                                  );
+
+                                  if (!showThumb) return fallbackIcon;
+                                  
+                                  return (
+                                    <>
+                                      {fallbackIcon}
+                                      <img
+                                        src={`http://localhost:3000/api/files/${item._id}/thumbnail?token=${localStorage.getItem('token')}`}
+                                        className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110 z-10"
+                                        alt={item.name}
+                                        loading="lazy"
+                                        decoding="async"
+                                        onError={(e) => {
+                                          e.target.style.opacity = '0';
+                                          e.target.style.pointerEvents = 'none';
+                                        }}
+                                      />
+                                    </>
+                                  );
+                                })()}
+                                </div>
                             )}
                           </div>
                         </div>
@@ -2458,6 +2636,92 @@ const PremiumFileManager = ({ onLogout }) => {
             </div>
           )}
 
+          {/* Share Settings Modal */}
+          {showShareSettings && (
+            <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+              <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl p-6 animate-in zoom-in-95 duration-200">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center">
+                    <Share2 className="w-5 h-5 text-blue-600" />
+                  </div>
+                  <h3 className="text-xl font-bold text-gray-900">Share Settings</h3>
+                </div>
+                
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  const formData = new FormData(e.target);
+                  const days = formData.get('expires');
+                  let expiresAt = null;
+                  if (days && days !== 'never') {
+                    const date = new Date();
+                    date.setDate(date.getDate() + parseInt(days, 10));
+                    expiresAt = date;
+                  }
+                  
+                  submitCreateShare({
+                    type: formData.get('type'),
+                    password: formData.get('password') || undefined,
+                    expiresAt
+                  });
+                }}>
+                  <div className="space-y-4 mb-6">
+                    <div>
+                      <label className="block text-[13px] font-bold text-gray-700 mb-1 uppercase tracking-wider">Access Type</label>
+                      <select 
+                        name="type" 
+                        value={shareAccessType}
+                        onChange={(e) => setShareAccessType(e.target.value)}
+                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all text-[15px] font-medium text-gray-900"
+                      >
+                        <option value="public">Public (Anyone with link)</option>
+                        <option value="private">Private (Restricted)</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-[13px] font-bold text-gray-700 mb-1 uppercase tracking-wider">Expiration</label>
+                      <select name="expires" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all text-[15px] font-medium text-gray-900">
+                        <option value="never">Never expires</option>
+                        <option value="1">1 Day</option>
+                        <option value="7">7 Days</option>
+                        <option value="30">30 Days</option>
+                      </select>
+                    </div>
+
+                    {shareAccessType === 'private' && (
+                      <div>
+                        <label className="block text-[13px] font-bold text-gray-700 mb-1 uppercase tracking-wider">Password (Optional)</label>
+                        <input 
+                          type="password" 
+                          name="password"
+                          placeholder="Leave blank for no password"
+                          className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all text-[15px] font-medium text-gray-900"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button 
+                      type="button"
+                      onClick={() => setShowShareSettings(null)} 
+                      className="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold rounded-xl transition"
+                    >
+                      Cancel
+                    </button>
+                    <button 
+                      type="submit"
+                      disabled={isCreatingShare}
+                      className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition shadow-sm disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {isCreatingShare ? <RefreshCcw className="w-4 h-4 animate-spin" /> : 'Create Link'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
           {/* Share Modal */}
           {showShareModal && (
             <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
@@ -2770,9 +3034,19 @@ const PremiumFileManager = ({ onLogout }) => {
                         ) : upload.status === 'completed' ? (
                           <CheckCircle2 className="w-4 h-4 text-green-500" />
                         ) : upload.status === 'failed' ? (
-                          <AlertCircle className="w-4 h-4 text-red-500" />
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-red-500 uppercase font-bold">Failed</span>
+                            <button onClick={() => retryUpload(upload.id)} className="text-gray-400 hover:text-blue-500 transition-colors" title="Retry Upload">
+                              <RefreshCcw className="w-4 h-4" />
+                            </button>
+                          </div>
                         ) : (
-                          <span className="text-[10px] text-gray-400 uppercase font-bold">Cancelled</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-gray-400 uppercase font-bold">Cancelled</span>
+                            <button onClick={() => retryUpload(upload.id)} className="text-gray-400 hover:text-blue-500 transition-colors" title="Retry Upload">
+                              <RefreshCcw className="w-4 h-4" />
+                            </button>
+                          </div>
                         )}
                       </div>
                       {upload.status === 'uploading' && (

@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { useAuthStore } from './store';
 import { userAPI } from './api/client';
-import { AuthScreen, PremiumFileManager } from './components';
+import { AuthScreen, PremiumFileManager, ProfessionalLoader } from './components';
 import SharePage from './pages/SharePage';
 import { Toaster } from 'react-hot-toast';
+
 
 function MainApp() {
   const { isAuthenticated, token, setUser, setToken, logout } = useAuthStore();
@@ -33,11 +34,8 @@ function MainApp() {
 
   if (loading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-white">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-gray-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-600">Loading...</p>
-        </div>
+      <div className="h-screen flex items-center justify-center bg-[#F8F9FC]">
+        <ProfessionalLoader dark={false} />
       </div>
     );
   }

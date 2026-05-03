@@ -21,7 +21,15 @@ export const useAuthStore = create((set) => ({
 export const useFileStore = create((set, get) => ({
   files: [],
   folders: [],
-  currentFolderId: null,
+  currentFolderId: (() => {
+    const params = new URLSearchParams(window.location.search);
+    const encoded = params.get('f') || params.get('folder');
+    if (!encoded) return null;
+    try {
+      const pad = encoded.length % 4 === 0 ? '' : '='.repeat(4 - (encoded.length % 4));
+      return atob(encoded.replace(/-/g, '+').replace(/_/g, '/') + pad);
+    } catch { return encoded; }
+  })(),
   selectedFiles: [],
   breadcrumbs: [{ id: 'root', name: 'Drive' }],
 
