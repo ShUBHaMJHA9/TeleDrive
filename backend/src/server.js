@@ -32,6 +32,7 @@ app.use(cors({
     const allowedOrigins = [
       'http://localhost:5173',
       'http://localhost:3000',
+      'https://teledrive-e27w.vercel.app',
       process.env.FRONTEND_URL,
     ].filter(Boolean);
     
