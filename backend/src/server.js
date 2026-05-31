@@ -16,6 +16,12 @@ import shareRoutes from './routes/shares.js';
 import { authenticateJWT } from './middleware/auth.js';
 
 const app = express();
+
+
+// Required for Vercel / reverse proxies remove for your own prodcation and sefty
+app.set('trust proxy', true);
+
+
 const PORT = process.env.PORT || 3000;
 
 // Production Speed & Security
