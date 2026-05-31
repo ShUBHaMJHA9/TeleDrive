@@ -12,9 +12,30 @@
     <a href="https://t.me/shubham97j"><img src="https://img.shields.io/badge/Telegram-@shubham97j-26A5E4?style=flat-square&logo=telegram"/></a>
     <a href="https://www.linkedin.com/in/shubhamjha2005/"><img src="https://img.shields.io/badge/LinkedIn-shubhamjha2005-0A66C2?style=flat-square&logo=linkedin"/></a>
   </p>
+
+  <p>
+    <strong>🌐 Live Demo:</strong><br>
+    https://teledrive-e27w.vercel.app/
+  </p>
+  
 </div>
 
 ---
+
+## 🚀 Live Demo
+
+Try TeleDrive instantly:
+
+🔗 https://teledrive-e27w.vercel.app/
+
+**Demo Login Flow**
+1. Enter Telegram API ID & API Hash
+2. Enter your phone number
+3. Receive OTP in Telegram
+4. Start uploading and managing files
+
+> No installation required.
+> 
 
 ## 📸 Screenshots
 
