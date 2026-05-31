@@ -67,10 +67,12 @@ app.use('/api/', limiter);
 // Connect to MongoDB
 const connectDB = async () => {
   try {
-    await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/telegram-drive', {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
+    if (!process.env.MONGO_URI) {
+      throw new Error('MONGO_URI is not defined');
+    }
+
+    await mongoose.connect(process.env.MONGO_URI);
+
     console.log('✅ MongoDB connected');
   } catch (error) {
     console.error('❌ MongoDB connection error:', error.message);
