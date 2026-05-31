@@ -2,18 +2,7 @@ import axios from 'axios';
 
 // Detect if running through Codespaces and construct proper API URL
 const getAPIBaseURL = () => {
-  const envURL = import.meta.env.VITE_API_URL;
-  if (envURL) return envURL;
-  
-  // If running on Codespaces public URL, construct backend URL
-  const hostname = window.location.hostname;
-  if (hostname.includes('github.dev')) {
-    // Replace 5173 with 3000 in the URL
-    const backendURL = window.location.protocol + '//' + hostname.replace('-5173.', '-3000.');
-    return backendURL + '/api';
-  }
-  
-  return 'http://localhost:3000/api';
+  return import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 };
 
 const API = axios.create({
